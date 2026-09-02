@@ -1,0 +1,12 @@
+# LogHub Linux_2k 人工标注:基于模板语义判定
+# 认证失败/Kerberos 失败/ALERT 异常退出/匿名 FTP 登录 → 异常;
+# 内核启动信息、服务启动成功、会话开闭 → 正常(启动噪音中的 "failed" 字样已人工排除并注明)。
+dataset: Linux_2k
+source: "https://github.com/logpai/loghub (Linux)"
+anomalous_events: [E8, E9, E13, E14, E15, E16, E17, E18, E19, E27, E31, E61, E112]
+rules:
+  - {id: linux_auth_failure, pattern: "(?i)authentication failure|authentication failed|couldn.t authenticate", component: auth, severity: critical, suggestion: "认证失败,检查来源与账户"}
+  - {id: linux_check_pass, pattern: "check pass; user unknown", component: auth, severity: warning, suggestion: "未知用户认证尝试"}
+  - {id: linux_alert, pattern: "ALERT", component: kernel, severity: critical, suggestion: "进程异常退出"}
+  - {id: linux_ftp_anonymous, pattern: "ANONYMOUS FTP LOGIN", component: ftp, severity: warning, suggestion: "匿名 FTP 登录"}
+  - {id: linux_user_unknown, pattern: "User unknown timed out", component: auth, severity: warning, suggestion: "未知用户会话超时"}

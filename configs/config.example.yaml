@@ -1,0 +1,64 @@
+# Akira 参考实现 - 配置模板:复制为 config.yaml 后填真实值
+# config.yaml 已被 .gitignore 忽略,不会入库
+
+# LLM API 配置(OpenAI 兼容协议,阶段1)
+llm:
+  base_url: "https://api.example.com/v1"   # 任意 OpenAI 兼容地址
+  api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxx"   # 你的 API Key
+  model: "your-model-name"                 # 模型名,换模型只改这行
+  temperature: 0.2                         # 0=确定,1=随机,日志分析要确定
+  max_tokens: 2000                         # 最大 token 数
+  timeout_seconds: 60                      # 单次 HTTP 请求超时,<=0 兜底 60
+  max_retries: 1                           # 失败后额外重试次数(仅 5xx/429/网络错误),0 = 不重试
+
+# Agent 配置(阶段3)
+agent:
+  max_iterations: 10   # ReAct 循环上限,<=0 代码兜底 10
+  timeout: 300         # 单次分析整体超时(秒),<=0 兜底 300;Ctrl+C 也能打断
+
+# 日志监控配置(阶段4B)
+watcher:
+  poll_interval_ms: 500  # 轮询间隔毫秒,性能不够可调小或换 fsnotify
+
+# 异常检测规则(阶段3.5)
+detector:
+  rules:
+    - id: docker_oom
+      pattern: "docker.*OOM|OOMKilled"
+      component: docker
+      severity: critical
+      suggestion: "容器内存不足,检查内存限制和内存泄漏"
+    - id: kubelet_crash
+      pattern: "CrashLoopBackOff"
+      component: kubelet
+      severity: critical
+      suggestion: "Pod 反复崩溃,查容器启动日志和退出码"
+    - id: nginx_5xx
+      pattern: "nginx.*(502|503|504)([^.0-9]|$)"
+      component: nginx
+      severity: warning
+      suggestion: "网关 5xx,查上游服务和连接池"
+
+# 告警配置(阶段4C):所有渠道"配了就启用,空 = 不发",可同时开多个
+alert:
+  cooldown_seconds: 300                  # 同一规则的告警冷却窗口(去重收敛;聚合关闭时生效)
+  aggregate_window_seconds: 0            # 滑动窗口聚合:>0 时窗口内同规则命中合并成一条告警(附次数);0 = 关闭
+  wecom_webhook_url: ""                  # 企业微信群机器人 webhook
+  feishu_webhook_url: ""                 # 飞书群自定义机器人 webhook
+  feishu_secret: ""                      # 飞书签名密钥(安全设置选"签名校验"时必填)
+  webhook_url: ""                        # 通用 Webhook:Alert 原样 JSON POST(自建接收端)
+
+# 历史告警存档(阶段4C)
+storage:
+  enabled: true       # 打开后:告警写 SQLite + Agent 获得 query_alert_history 工具
+  path: "alerts.db"
+
+# 复盘知识库(进化闭环):依赖 storage.enabled
+# 闭环:分析完成自动复盘入库(相似卡片去重合并) → 再遇相似问题自动检索注入 prompt → 复用次数即进化指标
+knowledge:
+  auto_save: true         # 分析完成后自动提炼经验卡片入库
+  embedding_model: ""     # 向量模型名(需 API 支持 /embeddings);配了启用"TF-IDF+向量"混合检索,空 = 纯 TF-IDF
+
+# Prometheus 指标端点(可观测性):watch 模式下开启,配 Prometheus 抓取
+metrics:
+  addr: ""            # 如 ":2112";空 = 不开启

@@ -1,0 +1,9 @@
+# LogHub Apache_2k 人工标注:基于模板语义与日志级别判定
+# [error] 级别的模板(mod_jk 错误状态/目录禁止访问/找不到 child/child init 异常)→ 异常;[notice] → 正常。
+# (E6 初版标注为正常,真实数据检查发现其原始级别就是 [error],已修正 —— 标注纠错也是评测流程的一部分)
+dataset: Apache_2k
+source: "https://github.com/logpai/loghub (Apache)"
+anomalous_events: [E3, E4, E5, E6]
+rules:
+  - {id: apache_error_level, pattern: '\[error\]', component: apache, severity: critical, suggestion: "Apache mod_jk 错误,检查 worker 状态与客户端请求"}
+  - {id: apache_forbidden, pattern: 'Directory index forbidden', component: apache, severity: warning, suggestion: "目录访问被规则禁止,确认是否为预期配置"}

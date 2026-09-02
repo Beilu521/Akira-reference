@@ -1,0 +1,14 @@
+# LogHub OpenSSH_2k 人工标注:基于模板语义判定"是否值得告警"
+# 标注口径:含 认证失败/无效用户/爆破迹象/错误 语义的模板 → 异常;
+#          正常断开(Bye Bye/user request)、会话开闭、成功登录、信息性消息 → 正常。
+# 该数据集是真实的 SSH 爆破攻击记录(LabSZ 服务器),异常行占比 ~72% 属预期。
+dataset: OpenSSH_2k
+source: "https://github.com/logpai/loghub (OpenSSH)"
+anomalous_events: [E4, E5, E6, E7, E8, E9, E10, E12, E13, E14, E15, E16, E17, E18, E19, E20, E21, E27]
+rules:
+  - {id: ssh_failed_password, pattern: "Failed password|Failed none", component: ssh, severity: critical, suggestion: "SSH 认证失败,检查是否有爆破攻击与账户安全"}
+  - {id: ssh_invalid_user, pattern: "Invalid user|invalid user", component: ssh, severity: critical, suggestion: "无效用户尝试登录,典型的用户名枚举爆破"}
+  - {id: ssh_pam_auth, pattern: "authentication failure|check pass; user unknown|more authentication failure", component: ssh, severity: critical, suggestion: "PAM 认证失败,结合来源 IP 判断是否爆破"}
+  - {id: ssh_break_in, pattern: "POSSIBLE BREAK-IN ATTEMPT", component: ssh, severity: critical, suggestion: "反向解析失败且疑似爆破,建议封禁来源 IP"}
+  - {id: ssh_error, pattern: "error:", component: ssh, severity: warning, suggestion: "sshd 报错,结合上下文判断认证方法耗尽等"}
+  - {id: ssh_too_many, pattern: "Too many authentication failures|ignoring max retries", component: ssh, severity: critical, suggestion: "认证次数超限,疑似爆破"}

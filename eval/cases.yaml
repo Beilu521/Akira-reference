@@ -1,0 +1,51 @@
+# 规则引擎评测集:line 是日志原文,expected 是期望命中的规则ID(空 = 应该一条都不命中)
+# 用法:go run ./cmd/akira eval
+# 建议姿势:改规则前后各跑一遍对比数字 —— 防止为修一条规则的误报,把另一条规则的召回改坏
+cases:
+  # ---- 应命中: docker_oom (pattern: docker.*OOM|OOMKilled) ----
+  - line: "2026-08-28 10:01:23 ERROR docker container abc OOMKilled"
+    expected: [docker_oom]
+  - line: "2026-08-28 10:02:00 WARNING docker OOM: kill process java pid=1234"
+    expected: [docker_oom]
+  - line: "2026-08-28 10:03:00 ERROR docker-java pod web-0 OOMKilled"
+    expected: [docker_oom]
+  # 注意:第二条备选分支 "OOMKilled" 单独出现也会命中 —— 这是规则设计如此,不算错
+  - line: "2026-08-28 10:04:00 ERROR process killed, reason: OOMKilled"
+    expected: [docker_oom]
+
+  # ---- 应命中: kubelet_crash (pattern: CrashLoopBackOff) ----
+  - line: "2026-08-28 11:00:00 WARNING kubelet pod api-7d9f CrashLoopBackOff"
+    expected: [kubelet_crash]
+  - line: "2026-08-28 11:01:00 ERROR k8s CrashLoopBackOff back-off restarting failed container"
+    expected: [kubelet_crash]
+  # 易混样本:行里出现 nginx 但没有 5xx,不应命中 nginx_5xx
+  - line: "2026-08-28 11:02:00 ERROR kubelet CrashLoopBackOff in pod nginx-proxy-xyz"
+    expected: [kubelet_crash]
+
+  # ---- 应命中: nginx_5xx (pattern: nginx.*(502|503|504)) ----
+  - line: "2026-08-28 12:00:00 ERROR nginx upstream timed out (504)"
+    expected: [nginx_5xx]
+  - line: "2026-08-28 12:01:00 WARNING nginx 502 Bad Gateway from upstream"
+    expected: [nginx_5xx]
+  - line: "2026-08-28 12:02:00 ERROR nginx proxy 503 Service Unavailable"
+    expected: [nginx_5xx]
+
+  # ---- 多规则同时命中:一行日志可以同时触发多条(不漏报) ----
+  - line: "2026-08-28 13:00:00 ERROR nginx upstream 504 after docker OOMKilled"
+    expected: [docker_oom, nginx_5xx]
+  - line: "2026-08-28 13:01:00 ERROR kubelet CrashLoopBackOff while nginx 503"
+    expected: [kubelet_crash, nginx_5xx]
+
+  # ---- 应放行: 正常日志(空 expected = 一条都不该命中) ----
+  - line: "2026-08-28 14:00:00 INFO app started"
+  - line: "2026-08-28 14:01:00 INFO nginx 200 GET /index.html ok"
+  - line: "2026-08-28 14:02:00 INFO health check passed"
+  - line: "2026-08-28 14:03:00 WARNING nginx upstream returned 500"   # 规则只盯 502/503/504,500 不归它管
+  - line: "2026-08-28 14:04:00 INFO docker container restarted cleanly"
+  # 回归样本:URL 里的 503.js 曾被旧规则误报,修复后(502|503|504)后不再跟 [0-9.] 才命中
+  - line: "2026-08-28 14:05:00 INFO nginx access 200 GET /static/503.js"
+
+  # ---- 故意留的误报样本(当前规则会命中,expected 为空)----
+  # eval 会把这类样本暴露成误报;修规则(比如要求 OOM 后面跟 Killed 或冒号)后此样本应放行
+  - line: "2026-08-28 15:00:00 INFO docker OOMScore adjusted to 0 by operator"
+    expected: []
