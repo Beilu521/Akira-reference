@@ -344,3 +344,73 @@ func TestServeDashboard(t *testing.T) {
 		t.Errorf("?token= 调 API 应放行,实际 %d", resp3.StatusCode)
 	}
 }
+
+// TestServeAnalyzeMalformed 验证畸形输入的边界:坏 JSON/空 path/目录当日志文件,
+// 全部 4xx 且带明确错误信息,绝不 500 绝不 panic —— HTTP 出口的健壮性底线
+func TestServeAnalyzeMalformed(t *testing.T) {
+	s, _ := newTestServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	// 坏 JSON → 400
+	resp, err := http.Post(srv.URL+"/api/analyze", "application/json", strings.NewReader("{not-json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("坏 JSON 应 400,实际 %d", resp.StatusCode)
+	}
+
+	// path 为空 → 400
+	body, _ := json.Marshal(serveRequest{Path: ""})
+	resp2, err := http.Post(srv.URL+"/api/analyze", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("空 path 应 400,实际 %d", resp2.StatusCode)
+	}
+
+	// path 是目录不是文件 → 400
+	body3, _ := json.Marshal(serveRequest{Path: t.TempDir()})
+	resp3, err := http.Post(srv.URL+"/api/analyze", "application/json", bytes.NewReader(body3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Errorf("目录 path 应 400,实际 %d", resp3.StatusCode)
+	}
+}
+
+// TestServeAlertsLimitBounds 验证 limit 参数边界:负数/0/超上限都安全回退默认值,
+// 合法上限生效 —— 恶意 limit 不该变成 DoS 放大器(一次查询拖走全表)
+func TestServeAlertsLimitBounds(t *testing.T) {
+	s, _ := newTestServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		limit  string
+		wantOK bool
+	}{
+		{"-5", true},   // 负数 → 回退默认 20(不报错,查得到数据)
+		{"0", true},    // 0 → 回退默认
+		{"1001", true}, // 超上限 → 回退默认(防全表拖库)
+		{"abc", true},  // 非数字 → 回退默认
+		{"5", true},    // 合法值生效
+	} {
+		resp, err := http.Get(srv.URL + "/api/alerts?limit=" + tc.limit)
+		if err != nil {
+			t.Fatalf("limit=%s 请求失败: %v", tc.limit, err)
+		}
+		var got []map[string]any
+		err = json.NewDecoder(resp.Body).Decode(&got)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Errorf("limit=%s 应 200 且合法 JSON,实际 %d (err=%v)", tc.limit, resp.StatusCode, err)
+		}
+	}
+}

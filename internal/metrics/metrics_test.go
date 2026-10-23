@@ -2,10 +2,12 @@ package metrics
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -59,5 +61,40 @@ func TestHandlerServesMetrics(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "akira_matches_total") {
 		t.Error("/metrics 输出里应有 akira_matches_total")
+	}
+}
+
+// TestStartServerLifecycle 端点生命周期:起得来、抓得到、停得下;
+// 非法地址必须启动即报错(端口占用等错误要暴露在启动时,不能闷在协程里)
+func TestStartServerLifecycle(t *testing.T) {
+	// 先占一个空闲端口再让给它:避免固定端口在 CI 上撞车
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	stop, err := StartServer(addr)
+	if err != nil {
+		t.Fatalf("启动失败: %v", err)
+	}
+	var ok bool
+	for i := 0; i < 20; i++ {
+		resp, err := http.Get("http://" + addr + "/metrics")
+		if err == nil {
+			resp.Body.Close()
+			ok = resp.StatusCode == http.StatusOK
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ok {
+		t.Error("端点起了但抓不到 /metrics")
+	}
+	stop()
+
+	if _, err := StartServer("ilegal::addr:"); err == nil {
+		t.Error("非法地址应启动即报错")
 	}
 }

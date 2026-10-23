@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"akira-reference/internal/config"
 	"akira-reference/internal/stats"
@@ -39,13 +41,13 @@ func costCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			return runCost(s)
+			return runCost(s, os.Stdout)
 		},
 	}
 }
 
-// runCost 从存档汇总成本账本(独立成函数:测试可以直接灌临时库)
-func runCost(s *storage.SQLiteStore) error {
+// runCost 从存档汇总成本账本,写入 w(独立成函数:测试灌临时库+缓冲区即可精确对账)
+func runCost(s *storage.SQLiteStore, w io.Writer) error {
 	counters, err := s.ReadStats()
 	if err != nil {
 		return err
@@ -58,30 +60,30 @@ func runCost(s *storage.SQLiteStore) error {
 	analyses := val(stats.KeyAnalyses)
 	tokens := val(stats.KeyLLMTokens)
 
-	fmt.Println("═══════════ Akira 成本报告 ═══════════")
-	fmt.Println()
-	fmt.Println("── 成本漏斗(双层过滤的完整链路)──")
-	fmt.Printf("  扫描日志      %s 行\n", humanCount(lines))
+	fmt.Fprintln(w, "═══════════ Akira 成本报告 ═══════════")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "── 成本漏斗(双层过滤的完整链路)──")
+	fmt.Fprintf(w, "  扫描日志      %s 行\n", humanCount(lines))
 	if lines > 0 {
-		fmt.Printf("  规则命中      %s 次 (%.4f%% 的行可疑)\n", humanCount(matches), pct(matches, lines))
+		fmt.Fprintf(w, "  规则命中      %s 次 (%.4f%% 的行可疑)\n", humanCount(matches), pct(matches, lines))
 	} else {
-		fmt.Printf("  规则命中      %s 次\n", humanCount(matches))
+		fmt.Fprintf(w, "  规则命中      %s 次\n", humanCount(matches))
 	}
-	fmt.Printf("  发出告警      %s 条 (收敛率 %.1f%%:聚合/冷却把 %s 次命中压成 %s 条通知)\n",
+	fmt.Fprintf(w, "  发出告警      %s 条 (收敛率 %.1f%%:聚合/冷却把 %s 次命中压成 %s 条通知)\n",
 		humanCount(alertsStat), convergeRate(alertsStat, matches), humanCount(matches), humanCount(alertsStat))
-	fmt.Printf("  深度分析      %s 次 (每次 = 一条 ReAct 工具调用链)\n", humanCount(analyses))
-	fmt.Printf("  LLM 消耗      %s tokens\n", humanCount(tokens))
-	fmt.Println()
+	fmt.Fprintf(w, "  深度分析      %s 次 (每次 = 一条 ReAct 工具调用链)\n", humanCount(analyses))
+	fmt.Fprintf(w, "  LLM 消耗      %s tokens\n", humanCount(tokens))
+	fmt.Fprintln(w)
 	if lines > 0 {
-		fmt.Println("── 成本密度(换算到规模)──")
-		fmt.Printf("  拦截率        %.4f%% 的日志行被规则层拦下,零 LLM 成本\n", 100-pct(analyses, lines))
-		fmt.Printf("  每百万行      %.0f tokens(按当前模型单价折算即真实花费)\n",
+		fmt.Fprintln(w, "── 成本密度(换算到规模)──")
+		fmt.Fprintf(w, "  拦截率        %.4f%% 的日志行被规则层拦下,零 LLM 成本\n", 100-pct(analyses, lines))
+		fmt.Fprintf(w, "  每百万行      %.0f tokens(按当前模型单价折算即真实花费)\n",
 			float64(tokens)*1e6/float64(lines))
-		fmt.Printf("  告警密度      每百万行 %.1f 条告警\n", float64(alertsStat)*1e6/float64(lines))
+		fmt.Fprintf(w, "  告警密度      每百万行 %.1f 条告警\n", float64(alertsStat)*1e6/float64(lines))
 	} else {
-		fmt.Println("── 尚无扫描数据:跑 akira watch 累计后这里就是完整账本 ──")
+		fmt.Fprintln(w, "── 尚无扫描数据:跑 akira watch 累计后这里就是完整账本 ──")
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// 告警结构:钱花在了哪些规则上
 	alertTotal, err := s.AlertCount()
@@ -89,15 +91,15 @@ func runCost(s *storage.SQLiteStore) error {
 		return err
 	}
 	if alertTotal > 0 {
-		fmt.Printf("── 告警结构(存档共 %d 条)──\n", alertTotal)
+		fmt.Fprintf(w, "── 告警结构(存档共 %d 条)──\n", alertTotal)
 		rules, err := s.AlertsByRule(5)
 		if err != nil {
 			return err
 		}
 		for _, r := range rules {
-			fmt.Printf("  %-16s %-8s %4d 条\n", r.RuleID, r.Severity, r.Count)
+			fmt.Fprintf(w, "  %-16s %-8s %4d 条\n", r.RuleID, r.Severity, r.Count)
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
 	// 知识库:经验收敛的数字
@@ -106,10 +108,10 @@ func runCost(s *storage.SQLiteStore) error {
 		return err
 	}
 	if cards > 0 {
-		fmt.Println("── 知识库(经验收敛)──")
-		fmt.Printf("  卡片 %d 张,累计复用 %d 次 —— 每张卡片平均救了 %.1f 次同类故障\n",
+		fmt.Fprintln(w, "── 知识库(经验收敛)──")
+		fmt.Fprintf(w, "  卡片 %d 张,累计复用 %d 次 —— 每张卡片平均救了 %.1f 次同类故障\n",
 			cards, reuses, float64(reuses)/float64(cards))
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 	return nil
 }

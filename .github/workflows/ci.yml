@@ -63,3 +63,26 @@ jobs:
           go-version: '1.26'
       - name: Fuzz matcher (30s)
         run: go test -fuzz=FuzzMatcherEquivalence -fuzztime=30s ./internal/detector/
+
+  # fuzz 冒烟:每个不变量目标轰 10 秒 —— 种子语料+回归语料全量回放,足够拦截退化;
+  # 长时轰炸留给本地(README 有命令),CI 不吃 10 分钟
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Fuzz smoke (10s × 9 targets)
+        run: |
+          go test ./internal/detector/  -fuzz FuzzMatcherEquivalence    -fuzztime 10s
+          go test ./internal/watcher/   -fuzz FuzzSplitLines            -fuzztime 10s
+          go test ./internal/knowledge/ -fuzz FuzzTokenizeInvariants    -fuzztime 10s
+          go test ./internal/knowledge/ -fuzz FuzzCosineRange           -fuzztime 10s
+          go test ./internal/knowledge/ -fuzz FuzzRankInvariants        -fuzztime 10s
+          go test ./internal/storage/   -fuzz FuzzBlobDecode            -fuzztime 10s
+          go test ./internal/alert/     -fuzz FuzzDedupInvariants       -fuzztime 10s
+          go test ./internal/alert/     -fuzz FuzzAggregatorCloseSafety -fuzztime 10s
+          go test ./internal/stats/     -fuzz FuzzTrackerTotals         -fuzztime 10s

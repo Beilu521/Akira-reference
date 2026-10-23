@@ -301,8 +301,14 @@ func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path 不能为空"})
 		return
 	}
-	if _, err := os.Stat(req.Path); err != nil {
+	st, err := os.Stat(req.Path)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "日志文件不可用: " + err.Error()})
+		return
+	}
+	if !st.Mode().IsRegular() {
+		// 目录/设备文件不是客户端错误就是滥用试探,一律 400(读目录报错归 500 是语义污染)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path 不是常规文件"})
 		return
 	}
 

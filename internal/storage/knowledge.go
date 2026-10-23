@@ -126,14 +126,21 @@ func embedToBlob(vec []float64) []byte {
 	return out
 }
 
-// blobToEmbed 字节块 → 向量;空块或长度不是 8 的倍数 → nil(防御脏数据)
+// blobToEmbed 字节块 → 向量;防御脏数据:空块、长度不是 8 的倍数、
+// 或解码出 NaN/Inf(位型损坏)→ 返回 nil。
+// nil = "没有有效向量",调用方(三级缓存)会让该卡片走 embedding API 重算 ——
+// 脏向量与其余弦毒化整个排序,不如当作不存在,自愈成本只是(本该只花一次的)一次 API 调用
 func blobToEmbed(b []byte) []float64 {
 	if len(b) == 0 || len(b)%8 != 0 {
 		return nil
 	}
 	out := make([]float64, len(b)/8)
 	for i := range out {
-		out[i] = math.Float64frombits(binary.LittleEndian.Uint64(b[i*8:]))
+		x := math.Float64frombits(binary.LittleEndian.Uint64(b[i*8:]))
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil
+		}
+		out[i] = x
 	}
 	return out
 }

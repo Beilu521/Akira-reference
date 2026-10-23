@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// splitLines 把"上轮半行缓冲 + 本轮新读到的字节"切成完整行,
+// 返回完整行列表与新的半行缓冲;数据里没有换行符 → 全部留作缓冲。
+// 行尾的 \r 去掉(Windows CRLF 兼容);相邻 \n 产生空行,原样保留(与 tail 行为一致)。
+// 单独成纯函数:tail 状态机的核心切口必须可测 —— fuzz 用"重组还原输入"不变量轰炸它
+func splitLines(pending, data string) (lines []string, newPending string) {
+	data = pending + data
+	idx := strings.LastIndexByte(data, '\n')
+	if idx < 0 {
+		return nil, data
+	}
+	for _, ln := range strings.Split(data[:idx], "\n") {
+		lines = append(lines, strings.TrimSuffix(ln, "\r"))
+	}
+	return lines, data[idx+1:]
+}
+
 // Watcher 轮询式 tail -f:像 tail -f 一样持续产出日志文件新增的行
 //
 // 设计取舍(计划书阶段4B):
@@ -98,7 +114,7 @@ func (w *Watcher) Tail(ctx context.Context, fromStart bool) (<-chan string, erro
 				}
 
 				if st.Size() == offset {
-					continue // 没有新内容
+					continue // 没有新内容(连打开都不用,空转零成本)
 				}
 
 				// 单轮最多读 1MB:文件暴涨时分多轮追平,避免一次读爆内存
@@ -109,17 +125,16 @@ func (w *Watcher) Tail(ctx context.Context, fromStart bool) (<-chan string, erro
 				buf := make([]byte, want)
 				// ReadAt 从指定偏移读、不移动文件游标,轮询场景最省心
 				n, err := f.ReadAt(buf, offset)
+				// 读完即释放句柄:不锁日志文件 —— Windows 上长持句柄会挡住 rename,
+				// 轮转工具直接失败;默认 500ms 轮询下每 tick 一次 open 的开销可忽略
+				f.Close()
+				f = nil
 				if n > 0 {
 					offset += int64(n)
-					data := pending + string(buf[:n])
-					// 最后一个 \n 之后是没写完整的半行,留到下一轮
-					if idx := strings.LastIndexByte(data, '\n'); idx >= 0 {
-						for _, ln := range strings.Split(data[:idx], "\n") {
-							out <- strings.TrimSuffix(ln, "\r") // Windows CRLF 兼容
-						}
-						pending = data[idx+1:]
-					} else {
-						pending = data
+					var lines []string
+					lines, pending = splitLines(pending, string(buf[:n]))
+					for _, ln := range lines {
+						out <- ln
 					}
 				}
 				// ReadAt 读满 n==len(buf) 时 err==nil;提前到 EOF 才有 err,这里读的范围
