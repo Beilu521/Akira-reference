@@ -207,6 +207,19 @@ make cover               # 覆盖率报告
 
 每个测试文件都是一个小教程:用 `httptest` 假 OpenAI 服务测 LLM 客户端、用可编程 fake 测 ReAct 循环、用 **Go fuzzing** 随机轰炸匹配器(单次 60 秒执行 **105 万+组**零失败)、用等价性测试保证并行扫描与顺序扫描结果一致……详见 [docs/PROJECT-DETAILS.md](docs/PROJECT-DETAILS.md)。
 
+**🧨 暴力测试军备**(9 个 fuzz 不变量目标 + 百万行全对账压测 + 16 组基准):
+
+```bash
+go test ./internal/detector/  -fuzz FuzzMatcherEquivalence -fuzztime 480s  # 8分钟轰出 1871 万组,零失败
+go test ./internal/watcher/   -fuzz FuzzSplitLines         -fuzztime 45s   # tail 状态机:重组还原不变量
+go test ./internal/storage/   -fuzz FuzzBlobDecode         -fuzztime 45s   # 脏 BLOB:NaN/Inf 拒收
+go test ./internal/alert/     -fuzz FuzzAggregatorCloseSafety -fuzztime 45s # 并发 Add×8 与 Close 竞速
+go test ./cmd/akira/ -run TestPipelineMillionLines -v                      # 百万行全管线,逐字对账
+go test -bench . -run XXX ./internal/...                                      # 热路径基准(冷却 71ns/次)
+```
+
+这些轰炸抓出过 3 个真实缺陷并全部修复:BLOB 脏位型放行 Inf/NaN(毒化余弦排序)、Windows 长持文件句柄挡死日志轮转、目录路径传 /api/analyze 误报 500。战绩区的故事全都是这么来的。
+
 > 🏆 战绩:评测框架曾抓出「URL 里的 `503.js` 被 5xx 规则误报」的真 bug;修复后 10 万行合成集精确率 **89.7% → 91.8%**;LogHub 三套真实日志 **精确率 / 召回率均 100%**。它还拦下过作者自己的一次错误优化:中文 bigram 分词"理论上更优",对抗评测集实测 **单字 79.2% > 并集 75.0% > bigram 68.8%**,当场上代码回退 —— 评测驱动开发,连自己的优化冲动都评。
 
 **检索离线基线**(48 查询三层对抗集,纯 TF-IDF、零 API 成本):P@1 = **79.2%**(`go test -run TestSparseRetrievalBaseline -v` 可复现);配置 embedding 后 `eval-retrieval` 的混合检索与它同框对比。
