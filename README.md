@@ -251,7 +251,7 @@ docker build -t akira . && docker run --rm -v /var/log:/logs akira watch /logs/a
 - [x] LogHub 真实日志集评测(OpenSSH / Apache / Linux 三套,全 100%)
 - [x] 503.js 误报修复(评测驱动开发完整闭环)
 - [x] MCP 服务器(标准库手写协议)
-- [ ] embedding 语义检索(架子已搭好,配置 `embedding_model` 即启用)
+- [x] embedding 语义检索:混合检索(TF-IDF+向量 RRF 融合)全链已实现;新增检索评测 harness(`internal/knowledge/retrieval_eval_test.go`),配置 embedding API 后可产出纯 TF-IDF vs 混合检索的真实 P@1 对比
 - [ ] Drain 日志模板解析(LogPAI 经典算法,科研向进阶)
 - [ ] PaaS 联动(阶段 5):与 `k8s-manager-golang` 打通,Agent 框架零改动
 

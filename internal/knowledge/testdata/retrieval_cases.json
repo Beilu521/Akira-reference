@@ -1,0 +1,10 @@
+[
+  {"query": "容量告急", "expected_card_title": "磁盘空间不足"},
+  {"query": "服务无响应", "expected_card_title": "上游 502 网关错误"},
+  {"query": "连接池耗尽", "expected_card_title": "数据库连接池耗尽"},
+  {"query": "内存泄漏排查", "expected_card_title": "OOM 内存溢出"},
+  {"query": "存储空间爆了", "expected_card_title": "磁盘空间不足"},
+  {"query": "程序吃内存太多被杀", "expected_card_title": "OOM 内存溢出"},
+  {"query": "后端接口大量报错", "expected_card_title": "上游 502 网关错误"},
+  {"query": "应用等不到数据库连接", "expected_card_title": "数据库连接池耗尽"}
+]
