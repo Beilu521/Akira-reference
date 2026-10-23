@@ -1,0 +1,37 @@
+# 检索质量评测集示例:akira eval-retrieval --cases <本文件>
+#
+# cards:知识库卡片(评测时临时灌入,与真实知识库无关)
+# queries:语义改写查询 —— expected 填期望命中的卡片 title
+#
+# 设计建议:一半用例用"字面可命中"的查询(对照组,TF-IDF 应该对),
+#           一半用"同义改写、零字面重叠"的查询(实验组,只有语义检索能救)
+
+cards:
+  - title: "磁盘空间不足"
+    root_cause: "临时文件与日志堆积占满磁盘"
+    fix_steps: "清理临时文件,扩容"
+  - title: "OOM 内存溢出"
+    root_cause: "内存泄漏导致进程被杀"
+    fix_steps: "排查泄漏点,加内存限制"
+  - title: "上游 502 网关错误"
+    root_cause: "上游服务无响应触发网关超时"
+    fix_steps: "检查上游健康,加重试"
+  - title: "数据库连接池耗尽"
+    root_cause: "慢查询占满连接池"
+    fix_steps: "优化慢查询,扩连接池"
+
+queries:
+  # 字面可命中(对照组)
+  - query: "连接池耗尽"
+    expected: "数据库连接池耗尽"
+  - query: "内存泄漏排查"
+    expected: "OOM 内存溢出"
+  # 语义改写(实验组:字面上与目标卡片零重叠)
+  - query: "容量告急"
+    expected: "磁盘空间不足"
+  - query: "服务无响应"
+    expected: "上游 502 网关错误"
+  - query: "存储爆了"
+    expected: "磁盘空间不足"
+  - query: "程序吃内存太多被杀"
+    expected: "OOM 内存溢出"

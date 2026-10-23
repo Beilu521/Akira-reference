@@ -67,7 +67,7 @@ func main() {
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		setupLogger()
 	}
-	root.AddCommand(demoCmd(), watchCmd(), analyzeCmd(), historyCmd(), evalCmd(), evalLoghubCmd(), serveCmd(), mcpCmd(), initCmd(), versionCmd())
+	root.AddCommand(demoCmd(), watchCmd(), analyzeCmd(), historyCmd(), evalCmd(), evalLoghubCmd(), evalRetrievalCmd(), serveCmd(), mcpCmd(), initCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

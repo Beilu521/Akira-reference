@@ -118,6 +118,7 @@ go run ./cmd/akira --mock watch app.log --tui
 | `akira analyze <文件>` | 给某个日志文件做一次性"体检" | `--from/--to` 只看某时间段、`--out` 把报告存成 md |
 | `akira history` | 查看历史告警(存在 SQLite 里) | `-n 20` 只看最近 20 条 |
 | `akira eval` | 给规则打分:精确率 / 召回率 / F1 | `--cases` 用自己的样本、`--scale 100000` 十万行压测 |
+| `akira eval-retrieval` | 知识检索质量评测:纯TF-IDF vs 混合检索 P@1 对比 | `--cases` 评测集(含 cards+queries,见 configs/retrieval_eval.example.yaml);需配置 `knowledge.embedding_model` |
 | `akira serve` | 变成 HTTP 服务(REST API + 指标) | `--addr :8080` |
 | `akira mcp` | 变成 MCP 服务器,喂给 Claude Desktop 等客户端 | — |
 | `akira version` | 查看版本 | — |
