@@ -35,7 +35,7 @@
 | + | 复盘知识库(进化闭环) | `internal/knowledge/` + `tools/knowledge.go` | 分析完成自动复盘入库,**相似卡片签名去重合并**(复用次数=进化指标);再遇相似问题自动检索注入 prompt(RAG);Agent 可用 save_knowledge 主动沉淀经验 |
 | + | 混合召回(RAG) | `knowledge.HybridRank` + `llm.EmbedClient` | TF-IDF(稀疏)+ 向量(语义)双路召回 + RRF 融合;embedding 未配时优雅降级纯 TF-IDF,向量服务不该成为单点 |
 | + | 向量持久化 | `storage/knowledge.go` + `knowledge.Index` | 向量存 SQLite BLOB + 三级缓存(内存→BLOB→API):同一张卡片一辈子只调一次 embedding API |
-| + | 模糊测试 | `detector/matcher_fuzz_test.go` | 随机"模式×日志行"持续轰炸分类匹配器,断言与朴素正则语义等价;30 秒 73.5 万次执行零失败 |
+| + | 模糊测试 | `detector/matcher_fuzz_test.go` | 随机"模式×日志行"持续轰炸分类匹配器,断言与朴素正则语义等价;60 秒 105 万+次执行零失败(语料库 700 个 interesting 输入) |
 | + | 并行扫描 | `detector/scan.go` | 大文件(>4MB)切块对齐行首 + 局部行号归并重编号(零额外 IO pass);重规则场景 2.8 倍,轻规则诚实保留顺序路径 |
 | + | 告警聚合 | `internal/alert/aggregator.go` | 滑动窗口:同规则窗口内全部命中合并成一条告警(附次数);Close 后保证不再回调(时序保证) |
 | + | 相似历史检索 | `internal/tools/similar.go` | TF-IDF + 余弦相似度找"以前最像这次的故障"—— 计划书预留的 query_similar_history |

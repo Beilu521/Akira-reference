@@ -1,7 +1,7 @@
 # SNAPSHOT · Akira-reference 完整状态快照（2026-10-23 · 超详细版）
 
 > 用途：跨会话状态恢复 + 面试前速刷。任何一次回来，先读这份——15 分钟捡起全部细节。
-> 仓库：`github.com/Beilu521/Akira-reference`（main 分支，HEAD = `ad37aec` + `5a84fad`）
+> 仓库：`github.com/Beilu521/Akira-reference`（main 分支，HEAD = `fe63fa1` + 成本账本/仪表盘迭代未提交）
 > 本地：`C:\Users\beilu\Desktop\Backlog\akira-reference\`
 
 ---
@@ -22,17 +22,15 @@
 
 ---
 
-## 二、代码量实测（2026-10-23）
+## 二、代码量实测（2026-10-23 深夜，两轮迭代后）
 
 ```
-Go 文件：      67 个
-总行数：       9,342
-├─ 生产代码：  5,694 行
-└─ 测试代码：  3,648 行（39%——测试近四成是简历硬卖点）
-包数：         14 个（全部测试通过，零 FAIL）
+Go 文件：      71 个
+总行数：       11,949
+包数：         15 个（全部测试通过，零 FAIL；race 检测通过；gofmt/vet 干净）
 ```
 
-⚠️ 数字漂移提醒：简历/README 徽章写的是"13 个测试包"，现为 14 个——下次更新简历与 README 徽章时同步改成 14。
+✅ 数字已核实（2026-10-23 go test 实测）：总包数 15，其中 14 个含测试且全过（internal/model 纯数据结构无测试文件；internal/stats 新增于 2026-10-23 晚，带 4 个测试）。README 徽章后来写的是"Tests-13 packages"——**现在测试包又变 14 个了，徽章该更新为 14**（此前"13→14"被撤销是因为当时 model 无测试、确实只有 13 个测试包；现在 stats 包补上后回到 14，别再绕晕）。
 
 ---
 
@@ -52,20 +50,21 @@ Agent 范式：ReAct（思考→调工具→观察→再想）手写循环，零
 
 ---
 
-## 四、模块地图（14 包，按依赖从底层往上读）
+## 四、模块地图（15 包，按依赖从底层往上读）
 
 ```
-cmd/akira/            🧩 组装层：cobra 命令与并发模型
+cmd/akira/            🧩 组装层：cobra 命令与并发模型（含内嵌 Web 仪表盘 dashboard.html）
 internal/model/       📄 两个纯数据结构（Alert/Knowledge），先读热身
 internal/config/      ⚙️ YAML 配置加载（LLM/Knowledge/Metrics/Server 段）
 internal/metrics/     📊 Prometheus 指标定义（集中一处防重复注册 panic）
+internal/stats/       💰 运行统计账本（2026-10-23 晚新增）：内存累加 + 周期落盘 SQLite
 internal/llm/         📡 LLM 封装：chat(SSE 流式/mock) + embeddings(批量向量化)
 internal/watcher/     📂 轮询 tail：offset 状态机，处理截断/轮转/半行
 internal/detector/    🔍 规则引擎：预编译正则 + 组件归因 + 并行扫描
 internal/agent/       🤖 ReAct 循环：思考-行动-观察
 internal/tools/       🧰 工具箱 8+：读上下文/grep/异常检测/知识库检索…
-internal/alert/       🔔 告警：飞书/Webhook/企微 + 冷却 + 滑动窗口聚合
-internal/storage/     🗄️ SQLite：告警存档 + 知识卡片 + 向量 BLOB
+internal/alert/       🔔 告警：飞书/Webhook/企微 + 冷却(落盘可恢复) + 滑动窗口聚合
+internal/storage/     🗄️ SQLite：告警存档 + 知识卡片 + 向量 BLOB + 成本统计账本
 internal/knowledge/   🧠 复盘知识库：TF-IDF/混合检索/三级向量缓存/版本守卫
 internal/eval/        📏 评测框架：规则 P/R/F1 + LogHub 真实数据集
 internal/mcp/         🔌 标准库手写 MCP 协议子集
@@ -88,8 +87,9 @@ internal/mcp/         🔌 标准库手写 MCP 协议子集
          agent.ReAct（仅可疑行+上下文）
               │  工具调用：read_log_context / grep_log / detect_anomalies / 知识库检索
               ▼
-         🔔 告警（冷却+去重+滑动窗口：100 条 OOM = 1 条通知）
+         🔔 告警（冷却+去重+滑动窗口：100 条 OOM = 1 条通知；冷却状态落盘，重启不对同故障再轰炸）
          🗄️ 告警存档（SQLite）
+         💰 成本账本（扫描/命中/告警/分析/token 落 stats 表 → akira cost 与仪表盘）
          🧠 复盘卡片自动入库（SaveAuto 签名去重合并）
 ```
 
@@ -127,7 +127,8 @@ internal/mcp/         🔌 标准库手写 MCP 协议子集
    真实数字：TestRetrievalEvalReal（需 AKIRA_BASE_URL/AKIRA_API_KEY/AKIRA_EMBED_MODEL 三环境变量）
 ```
 
-**评测驱动开发的实绩**（面试必讲）：评测曾抓出「URL 中的 503.js 被 5xx 规则误报」真 bug → 修复 → 10 万行合成集精确率 89.7% → 91.8%；LogHub 三套真实日志 P/R 均 100%。
+**评测驱动开发的实绩**（面试必讲）：评测曾抓出「URL 中的 503.js 被 5xx 规则误报」真 bug → 修复 → 10 万行合成集精确率 89.7% → 91.8%；LogHub 三套真实日志 P/R 均 100%。它还拦下过作者自己的错误优化：bigram 分词"理论上更优"，对抗集实测 单字 79.2% > 并集 75.0% > bigram 68.8%，当场回退。
+**检索离线基线**（2026-10-23 深夜新增）：48 查询对抗集上纯 TF-IDF P@1 = **79.2%**（`TestSparseRetrievalBaseline` 可复现，零 API 成本）——真机混合检索数字有了同框对照组。
 
 ---
 
@@ -190,6 +191,42 @@ akira_embedding_vector_source_total{source=memory|blob|api}  向量来源分布
 
 ---
 
+## 六-B、成本账本 + Web 仪表盘（2026-10-23 晚迭代，本轮新增）
+
+**动机**："双层过滤切掉 99.99%" 原来只是口头叙事——Prometheus Counter 进程一退就归零。
+本轮把成本故事变成**跨重启可查的累计数字** + **一眼看懂的屏显**（用户要求的"量化数据好看"落地）。
+
+| 文件 | 内容 | 面试考点 |
+|---|---|---|
+| `internal/stats/stats.go`（~170 行） | `Tracker`：Add() 内存累加（纳秒级，高频行计数不碰磁盘）→ 后台协程 30s 周期 BumpStats 批量落库 → Close 终冲。**落库失败把账记回内存下轮重试，不静默丢数** | 写入路径分层：高频 Add 与低频落库解耦；Snapshot = 库存 + 内存增量（读方立即可见） |
+| `internal/storage/storage.go` 新增 | stats 表（key/value）；`BumpStats`（UPSERT ON CONFLICT 累加）；`ReadStats`；`LastAlertTimes`（GROUP BY rule_id 取 MAX）；`AlertsByRule`；`AlertCount`；`KnowledgeStats`（COUNT + SUM(hit_count)） | SQLite 无 ON CONFLICT 顾虑（3.24+）；知识库"10 次故障 1 张卡复用 9 次"靠 KnowledgeStats 兑现成数字 |
+| `internal/alert/alert.go` 新增 `Seed` | 冷却状态恢复：只回填窗口内的记录；**已有进程内新记录时不被旧数据倒退覆盖**（倒退 = 变相解除冷却） | 修真 bug：Dedup.last 原来纯内存，重启冷却清零 → 重启瞬间同故障再轰炸一轮，与"防轰炸"卖点自相矛盾 |
+| `cmd/akira/main.go` 接线 | dedup.Seed（从存档恢复）+ tracker 五处埋点：行/命中/告警/分析次数/LLM token（token 用 `UsedTokens()` 前后差值，mock 客户端恒 0 属预期） | tracker 只在 store 为 *SQLiteStore 时创建（类型断言，Store 接口不动） |
+| `cmd/akira/cost.go`（~160 行，新命令） | `akira cost`：成本漏斗（扫描→命中→告警→分析→token）+ 拦截率 + 每百万行 token + 收敛率 + 告警 TOP + 知识库复用均次 | "每百万行 X tokens"= 跨项目可比的成本密度；独立 runCost(store) 可测 |
+| `cmd/akira/serve.go` 新增 | `GET /api/stats`（一次拉齐：counters/按规则聚合/24h 时间线/知识库/拦截率，全来自 SQLite，serve 重启不归零）；`GET /` 内嵌仪表盘；auth 中间件支持 `?token=` 查询参数（浏览器打不开自定义 Header） | 24h 桶空位补零（图形要连续）；起点=now-23h 整点（曾把符号写反，桶全落未来，测试抓出） |
+| `cmd/akira/dashboard.html`（单文件 ~14KB） | 暗色监控大屏：6 KPI 卡 + 成本漏斗条形图 + **拦截率大数字（发光绿）** + 规则 TOP（严重级配色）+ 手写 SVG 24h 柱状图 + 最近告警表；5s 自动刷新；token 走 URL 携带→前端转 Bearer | **go:embed 编进二进制，零 npm、零 CDN、零构建链**——"零依赖"人设延伸到前端；HTML 已做转义防 XSS |
+| 测试 | stats 包 4 测（周期 flush/Snapshot 合并/失败不丢账/**并发 Add 精确**，-race）；storage 4 测；alert Seed 测；serve stats+dashboard 测 | ⚠️ 教训：测试轮询裸读 fakeStore 计数器被 -race 抓——测试自身也要守锁纪律 |
+
+**端到端冒烟实测数字**（mock LLM，7 行日志 3 行 OOM）：扫描 7 → 命中 3（42.86% 可疑）→ 冷却收敛 1 条告警（33.3%）→ 1 次深度分析，**拦截率 85.71%**；`cost` 报告与 `/api/stats` 数字一致。
+**已知边界**：30s 周期 flush 之间硬杀进程（kill -9 / timeout）会丢未落盘的 ≤30s 计数（告警/知识卡是同步写不受影响）；真实终端 Ctrl+C 走优雅路径全量落盘。
+
+---
+
+## 六-C、检索评测对抗化 + 分词实测选型 + embeddings 重试（2026-10-23 深夜迭代）
+
+| 项 | 内容 | 数字/结论 |
+|---|---|---|
+| 评测集对抗性强化 | `configs/retrieval_eval.example.yaml` 与 `internal/knowledge/testdata/retrieval_cases.json` 从 4 卡 8 查询扩到 **24 卡 8 组近邻簇 + 48 查询三层**（16 对照/24 实验/8 干扰）；harness 测试与 CLI 评测都加了"expected 标题必须存在"的笔误守卫（笔误原先是静默拉低 P@1） | 对抗性验证：纯 TF-IDF 从"满分自嗨"降到 79.2%——评测集真正有了区分度 |
+| 分词实测选型 | 当场实现并对比了 单字/纯 bigram/单字+bigram并集 三种方案（临时对比测试，用完即删） | **单字 79.2% > 并集 75.0% > bigram 68.8% → 保留单字**。bigram 区分度高但字面召回脆（零字面重叠查询从部分匹配塌缩成零匹配）。假设被评测拦下 = 评测驱动开发的活案例。TokenizeBigram 代码已删，结论写进 Tokenize 注释 |
+| 离线基线测试 | `TestSparseRetrievalBaseline`：纯 TF-IDF 在对抗集上的 P@1 持久化进测试（断言下限 50% 防回归，上限留观察） | 79.2%，真机混合检索数字的对照组 |
+| 签名冻结守卫 | `TestSignatureFrozenOnUnigram`：锁死 SignatureFor 的单字分词行为——谁改签名分词，存量卡去重全断，测试拦截 | 签名与检索分词两轨：签名求稳冻结，检索求准可迭代 |
+| embeddings 重试 | `EmbedClient` 与 ChatCtx 对称：5xx/429/网络错误指数退避（1s 起步封顶 5s），4xx 直接失败，ctx 取消立即返回；指标只在最外层语义记一次（重试中间失败不算独立请求）；复用 APIError.Retryable | 真机价值：向量服务抖一下不再整轮降级 TF-IDF |
+| fuzz 刷新 | 60 秒会话 | **1,053,326 组执行零失败**，语料库 700 个 interesting 输入 |
+
+**本轮量化数据汇总**（推送前实测）：样本集 P 93.3%/R 100%/F1 0.966；十万行 P 91.8%/R 100%/吞吐 **809,188 行/秒**（单核）；LogHub 三套全 **100%/100%**；检索离线基线 **79.2%**；fuzz 60s **105 万组**零失败；race/vet/gofmt 全绿。
+
+---
+
 ## 七、配置说明
 
 ```yaml
@@ -227,10 +264,11 @@ alert:
 | `akira watch <文件…>` | 主力常驻监控（--tui 仪表盘） |
 | `akira analyze <文件>` | 一次性体检（--from/--to/--out 报告） |
 | `akira history` | 历史告警（SQLite） |
+| **`akira cost`** | **【新】成本报告：扫描→命中→告警→token 完整账本 + 拦截率 + 每百万行成本密度** |
 | `akira eval` | 规则评测 P/R/F1（--scale 压测） |
 | `akira eval-loghub <目录>` | LogHub 真实数据集评测 |
 | **`akira eval-retrieval`** | **【新】知识检索评测：纯 TF-IDF vs 混合检索 P@1** |
-| `akira serve` | HTTP 服务（REST API + /metrics） |
+| `akira serve` | HTTP 服务（**浏览器开根路径 = 监控仪表盘**：成本漏斗/拦截率/告警时间线 + REST API + /metrics） |
 | `akira mcp` | MCP 服务器（Claude Desktop 可调） |
 | `akira version` | 版本 |
 
@@ -243,7 +281,9 @@ alert:
 [x] 503.js 误报修复（评测驱动开发完整闭环）
 [x] MCP 服务器（标准库手写协议）
 [x] embedding 语义检索：混合检索全链实现 + 检索评测 harness（2026-10-23 打勾）
-    ——— 真实 P@1 数字：待配置 embedding API 后跑 TestRetrievalEvalReal 产出
+    ——— 真实 P@1 数字：待配置 embedding API 后跑 TestRetrievalEvalReal 产出（离线基线 79.2% 已就位）
+[x] 成本账本 + Web 仪表盘（2026-10-23 晚打勾）：akira cost + serve 内嵌大屏 + 冷却落盘
+[x] 检索评测集对抗性强化（2026-10-23 深夜打勾）：24 卡 48 查询三层用例 + 离线基线 79.2% + 分词实测选型保留单字 + embeddings 重试
 [ ] Drain 日志模板解析（LogPAI 经典算法，科研向，1 月专题）
 [ ] PaaS 联动（阶段 5）：与 k8s-manager-golang（OttoStack）打通
 ```
@@ -296,6 +336,12 @@ c98d3af  final
 10. 和 OnCallAgent 类项目区别？ 评测驱动 + 成本架构 + 零框架（有数字的是我们）
 11. 误报怎么发现和修？     评测框架抓的（503.js 案例，89.7→91.8）
 12. fuzz 测什么？          规则语义边界，73.5 万组输入，离线零 LLM 成本
+13. 成本数字怎么不信口开河？ stats 账本落 SQLite 跨重启可查：拦截率/每百万行 token，akira cost 可复现
+14. 统计为什么不只用 Prometheus？ Counter 是进程内存态，重启归零；成本承诺必须持久化——指标(实时)与账本(累计)各管一段
+15. 重启会重复告警吗？      会——所以冷却状态从存档回填（Seed 只收窗口内记录，且不让旧数据倒退覆盖新状态）
+16. 前端用了什么框架？      没有。单文件 go:embed + 手写 SVG，零 npm/CDN/构建链——零依赖人设贯穿到前端
+17. 检索的分词为什么是单字切？ 实测选型：对抗集上 单字 79.2% > 并集 75.0% > bigram 68.8%——bigram 区分度高但字面召回脆；有数字就不靠信仰
+18. 评测还抓过什么？        503.js 误报（89.7→91.8）、24h 时间线桶符号写反（单测抓的）、以及作者自己的 bigram 优化假设（对抗集当场拦下）
 ```
 
 ---
@@ -317,8 +363,8 @@ c98d3af  final
 
 ```
 ① 真机数字：API 网关支持 /embeddings 时 → 设置三环境变量 → go test -run RetrievalEvalReal -v
-   → 产出真实 P@1 → 更新简历 Akira 块 + README
-② 待办：README 徽章/简历 bullet "13 个测试包" → "14 个"
-③ students.json 来历待确认（是否该提交/删除）
-④ 更大排期：链路③ otto-replica 命令下发已完成，下一站 M3 outbox 或 1 月 Agent 专题
+   → 产出真实 P@1（与离线基线 79.2% 同框）→ 更新简历 Akira 块 + README
+② students.json 来历待确认（是否该提交/删除）
+③ 更大排期：链路③ otto-replica 命令下发已完成，下一站 M3 outbox 或 1 月 Agent 专题
+④ 两轮迭代（成本账本/仪表盘 + 评测对抗化/重试）已全部提交推送（2026-10-23）
 ```

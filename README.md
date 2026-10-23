@@ -6,7 +6,7 @@
 <p align="center">
   <img src="https://github.com/Beilu521/akira-reference/actions/workflows/ci.yml/badge.svg" alt="CI"/>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26"/>
-  <img src="https://img.shields.io/badge/Tests-13%20packages-success" alt="Tests"/>
+  <img src="https://img.shields.io/badge/Tests-14%20packages-success" alt="Tests"/>
   <img src="https://img.shields.io/badge/UI-CLI%20%2B%20TUI%20%2B%20REST%20%2B%20MCP-8A2BE2" alt="UI"/>
   <img src="https://img.shields.io/badge/by-beilu.ops-FFB6C1?logo=github" alt="by beilu.ops"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT"/>
@@ -54,9 +54,10 @@
 
 ### 🛠️ 工程化细节
 - **规则热更新**:watch 运行时改 `config.yaml`,约 2 秒生效;坏规则会被整体拒绝,旧规则继续服务
-- **告警不轰炸**:同规则冷却去重 + 滑动窗口聚合(100 行 OOM 只发 1 条告警);支持**飞书 / Webhook / 企微**
+- **告警不轰炸**:同规则冷却去重 + 滑动窗口聚合(100 行 OOM 只发 1 条告警);冷却状态落盘,**重启不对同一故障再轰炸一轮**;支持**飞书 / Webhook / 企微**
+- **成本账本**:扫描行数/命中/告警/token 全量落 SQLite,`akira cost` 出报告、仪表盘画漏斗——"规则层拦截率 99.99%"不是口号,是可查的累计数字
 - **会进化的知识库**:每次分析成功自动沉淀"复盘卡片",下次遇到相似故障直接检索历史结论注入给模型(类似 RAG);可配 embedding 升级成"TF-IDF + 向量"混合检索
-- **三种入口,一套工具**:`ReAct Agent`(自动编排)、`REST API`、`MCP`(Claude Desktop 可直接调用)
+- **四种入口,一套工具**:`ReAct Agent`(自动编排)、`Web 仪表盘`、`REST API`、`MCP`(Claude Desktop 可直接调用)
 - **可观测性**:Prometheus 指标(`/metrics`)、token 消耗追踪、结构化日志
 - **零第三方 LLM 框架**:OpenAI 兼容协议手写薄封装,换模型只改配置
 
@@ -117,9 +118,10 @@ go run ./cmd/akira --mock watch app.log --tui
 | `akira watch <文件…>` | **主力命令**:常驻监控日志,支持多文件 / 通配符(`logs/*.log`) | `--tui` 仪表盘、`--from-start` 从头读、`--verbose` 看调试日志 |
 | `akira analyze <文件>` | 给某个日志文件做一次性"体检" | `--from/--to` 只看某时间段、`--out` 把报告存成 md |
 | `akira history` | 查看历史告警(存在 SQLite 里) | `-n 20` 只看最近 20 条 |
+| `akira cost` | **成本报告**:累计扫描行数 → 告警 → LLM token 的完整账本,"双层过滤切掉 99.99%"的数字凭证 | 需 `storage.enabled` |
 | `akira eval` | 给规则打分:精确率 / 召回率 / F1 | `--cases` 用自己的样本、`--scale 100000` 十万行压测 |
 | `akira eval-retrieval` | 知识检索质量评测:纯TF-IDF vs 混合检索 P@1 对比 | `--cases` 评测集(含 cards+queries,见 configs/retrieval_eval.example.yaml);需配置 `knowledge.embedding_model` |
-| `akira serve` | 变成 HTTP 服务(REST API + 指标) | `--addr :8080` |
+| `akira serve` | 变成 HTTP 服务:浏览器打开根路径就是**监控仪表盘**(成本漏斗/拦截率/告警时间线),另有 REST API + 指标 | `--addr :8080` |
 | `akira mcp` | 变成 MCP 服务器,喂给 Claude Desktop 等客户端 | — |
 | `akira version` | 查看版本 | — |
 
@@ -146,7 +148,8 @@ internal/llm/         📡 LLM 封装:超时/重试/流式 SSE/离线 mock
 internal/detector/    🔍 规则引擎:预编译正则 + 组件归因 + 并行扫描
 internal/watcher/     📂 轮询 tail:offset 状态机,处理截断/轮转/半行
 internal/alert/       🔔 告警:多渠道 + 冷却 + 聚合
-internal/storage/     🗄️ SQLite 存档(告警 + 知识向量)
+internal/storage/     🗄️ SQLite 存档(告警 + 知识向量 + 成本统计账本)
+internal/stats/       💰 运行统计:内存累加 + 周期落盘(重启不丢的成本数字)
 internal/knowledge/   🧠 复盘知识库 + TF-IDF/向量检索
 internal/eval/        📏 评测框架(P/R/F1,含 LogHub 真实数据集)
 internal/metrics/     📊 Prometheus 指标
@@ -202,9 +205,11 @@ go test -race ./...      # 竞态检测(Windows 需 gcc;CI 上必有)
 make cover               # 覆盖率报告
 ```
 
-每个测试文件都是一个小教程:用 `httptest` 假 OpenAI 服务测 LLM 客户端、用可编程 fake 测 ReAct 循环、用 **Go fuzzing** 随机轰炸匹配器 70 万次、用等价性测试保证并行扫描与顺序扫描结果一致……详见 [docs/PROJECT-DETAILS.md](docs/PROJECT-DETAILS.md)。
+每个测试文件都是一个小教程:用 `httptest` 假 OpenAI 服务测 LLM 客户端、用可编程 fake 测 ReAct 循环、用 **Go fuzzing** 随机轰炸匹配器(单次 60 秒执行 **105 万+组**零失败)、用等价性测试保证并行扫描与顺序扫描结果一致……详见 [docs/PROJECT-DETAILS.md](docs/PROJECT-DETAILS.md)。
 
-> 🏆 战绩:评测框架曾抓出「URL 里的 `503.js` 被 5xx 规则误报」的真 bug;修复后 10 万行合成集精确率 **89.7% → 91.8%**;LogHub 三套真实日志 **精确率 / 召回率均 100%**。
+> 🏆 战绩:评测框架曾抓出「URL 里的 `503.js` 被 5xx 规则误报」的真 bug;修复后 10 万行合成集精确率 **89.7% → 91.8%**;LogHub 三套真实日志 **精确率 / 召回率均 100%**。它还拦下过作者自己的一次错误优化:中文 bigram 分词"理论上更优",对抗评测集实测 **单字 79.2% > 并集 75.0% > bigram 68.8%**,当场上代码回退 —— 评测驱动开发,连自己的优化冲动都评。
+
+**检索离线基线**(48 查询三层对抗集,纯 TF-IDF、零 API 成本):P@1 = **79.2%**(`go test -run TestSparseRetrievalBaseline -v` 可复现);配置 embedding 后 `eval-retrieval` 的混合检索与它同框对比。
 
 ---
 
@@ -216,6 +221,7 @@ make cover               # 覆盖率报告
 | 🕵️ 深度体检 | `curl -X POST localhost:8080/api/analyze -d '{"path":"app.log","deep":true}'` | Agent 出根因报告 |
 | 🤖 让 Claude 用你的工具 | 配置 MCP 后对它说"帮我查查日志" | Claude Desktop 直接调用你的日志工具 |
 | 📊 监控你的监控 | 配 `metrics.addr: ":2112"` | `/metrics` 输出命中/告警/token 指标 |
+| 🖥️ 网页仪表盘 | `akira serve` 后浏览器开 `http://localhost:8080` | 成本漏斗 + 拦截率大数字 + 告警时间线,每 5 秒自动刷新(单文件内嵌,零前端依赖) |
 | 🧠 让它记住教训 | 分析完自动写复盘卡片 | 同类故障下次秒出历史结论 |
 
 ---
@@ -253,6 +259,8 @@ docker build -t akira . && docker run --rm -v /var/log:/logs akira watch /logs/a
 - [x] 503.js 误报修复(评测驱动开发完整闭环)
 - [x] MCP 服务器(标准库手写协议)
 - [x] embedding 语义检索:混合检索(TF-IDF+向量 RRF 融合)全链已实现;新增检索评测 harness(`internal/knowledge/retrieval_eval_test.go`),配置 embedding API 后可产出纯 TF-IDF vs 混合检索的真实 P@1 对比
+- [x] 成本账本 + Web 仪表盘:扫描/命中/告警/token 落 SQLite,`akira cost` 报告 + `akira serve` 内嵌监控大屏(单文件 go:embed,手写 SVG,零 npm 依赖);冷却状态落盘防重启轰炸
+- [x] 检索评测集对抗性强化:24 卡(8 组近邻簇)+ 48 查询(对照/实验/干扰三层),离线基线 P@1 79.2%;分词方案实测选型 —— 单字 79.2% > 并集 75.0% > bigram 68.8%,保留单字(embeddings 客户端同批补上 5xx/429 指数退避重试)
 - [ ] Drain 日志模板解析(LogPAI 经典算法,科研向进阶)
 - [ ] PaaS 联动(阶段 5):与 `k8s-manager-golang` 打通,Agent 框架零改动
 
