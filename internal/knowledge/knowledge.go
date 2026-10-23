@@ -345,8 +345,10 @@ func TruncateRunes(s string, max int) string {
 // ===== 文本向量化数学(TF-IDF + 余弦):朴素但够用,全标准库 =====
 
 // Tokenize 朴素分词:连续的 ASCII 字母/数字切成一个词(小写化),汉字按单字切。
-// 日志文本里"错误码/组件名/数字"占大头,朴素分词已经够用;
-// 什么时候换真分词/embedding?当中文长文本的语义相似度明显影响检索质量时(见 Roadmap)
+// 分词方案是用检索评测集实测选型的:对抗集上 单字 P@1 79.2% > 单字+bigram 并集 75.0% >
+// 纯 bigram 68.8%(2026-10-23 实测,见 TestSparseRetrievalBaseline)——
+// bigram 区分度更高但字面召回更脆,零字面重叠的查询从"部分匹配"塌缩成"零匹配"。
+// 该 Tokenize 同时供 SignatureFor 生成去重签名:签名单词切分冻结不动(换分词 = 存量签名全失效)。
 func Tokenize(s string) []string {
 	var tokens []string
 	var word strings.Builder
@@ -374,6 +376,7 @@ func Tokenize(s string) []string {
 }
 
 // TfIdfVectors 对一组文档计算 TF-IDF 稀疏向量(最后一篇通常是查询串)
+// 分词用 Tokenize(实测选型,见其注释)。
 //   - TF:词在本文档的出现次数
 //   - IDF:log(N/df) + 1 —— 越少见的词权重越高("504" 比 "error" 更有区分度)
 func TfIdfVectors(docs []string) []map[string]float64 {

@@ -12,16 +12,16 @@ import "time"
 // 知识库随故障重复而"收敛":相似卡片合并(HitCount 累加)而不是无限增殖,
 // 这就是它和普通日志存档的本质区别 —— 存档是流水账,知识库是提炼后的技能。
 type Knowledge struct {
-	ID        int64     `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Signature string    `json:"signature"`  // 特征签名:规则ID + 归一化关键词,用于去重合并
-	Title     string    `json:"title"`      // 一句话:什么问题
-	RootCause string    `json:"root_cause"` // 根因分析
-	FixSteps  string    `json:"fix_steps"`  // 修复步骤
-	Severity  string    `json:"severity,omitempty"`
-	HitCount  int       `json:"hit_count"` // 被检索复用的次数(进化指标)
-	Source    string    `json:"source"`    // auto=分析后自动复盘 / agent=Agent 主动存 / manual=人工
-	Embedding []float64 `json:"-"`         // 稠密向量(混合检索用,持久化在 BLOB 列;JSON 输出省略——几千个浮点数不该进响应体)
-	EmbedModel string   `json:"-"`         // 生成该向量用的 embedding 模型(版本守卫:换模型后旧向量视为失效,自动重算)
+	ID         int64     `json:"id"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Signature  string    `json:"signature"`  // 特征签名:规则ID + 归一化关键词,用于去重合并
+	Title      string    `json:"title"`      // 一句话:什么问题
+	RootCause  string    `json:"root_cause"` // 根因分析
+	FixSteps   string    `json:"fix_steps"`  // 修复步骤
+	Severity   string    `json:"severity,omitempty"`
+	HitCount   int       `json:"hit_count"` // 被检索复用的次数(进化指标)
+	Source     string    `json:"source"`    // auto=分析后自动复盘 / agent=Agent 主动存 / manual=人工
+	Embedding  []float64 `json:"-"`         // 稠密向量(混合检索用,持久化在 BLOB 列;JSON 输出省略——几千个浮点数不该进响应体)
+	EmbedModel string    `json:"-"`         // 生成该向量用的 embedding 模型(版本守卫:换模型后旧向量视为失效,自动重算)
 }

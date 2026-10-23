@@ -3,35 +3,195 @@
 # cards:知识库卡片(评测时临时灌入,与真实知识库无关)
 # queries:语义改写查询 —— expected 填期望命中的卡片 title
 #
-# 设计建议:一半用例用"字面可命中"的查询(对照组,TF-IDF 应该对),
-#           一半用"同义改写、零字面重叠"的查询(实验组,只有语义检索能救)
+# 三层用例设计(对抗性的来源):
+#   [对照] 字面可命中 —— TF-IDF 应该对,用于确认稀疏检索的基本盘
+#   [实验] 语义改写   —— 与目标卡片零/极少字面重叠,主要靠 embedding 语义救
+#   [干扰] 近邻混淆   —— 查询词与错误卡片高度重叠,考验"相似但不同因"的区分度
+#
+# 卡片特意组织成 8 组近邻簇(磁盘/内存/数据库/网关/CPU/网络/中间件/K8s),
+# 簇内卡片共享大量词汇 —— 只有近邻干扰足够多,P@1 的分差才有意义。
 
 cards:
+  # ── 簇A:磁盘 ─────────────────────────────────
   - title: "磁盘空间不足"
-    root_cause: "临时文件与日志堆积占满磁盘"
-    fix_steps: "清理临时文件,扩容"
+    root_cause: "临时文件与日志堆积占满磁盘,写入报 no space left on device"
+    fix_steps: "清理临时文件,轮转归档旧日志,扩容"
+  - title: "磁盘 IO 打满"
+    root_cause: "随机读写过密把磁盘 IO 利用率打到 100%,所有请求等盘变慢"
+    fix_steps: "定位高 IO 进程,加读写缓存,换 SSD"
+  - title: "inode 耗尽"
+    root_cause: "海量小文件把 inode 用光,空间没满也创建不了新文件"
+    fix_steps: "清理小文件目录,合并小文件,inode 扩容"
+  # ── 簇B:内存 ─────────────────────────────────
   - title: "OOM 内存溢出"
-    root_cause: "内存泄漏导致进程被杀"
-    fix_steps: "排查泄漏点,加内存限制"
-  - title: "上游 502 网关错误"
-    root_cause: "上游服务无响应触发网关超时"
-    fix_steps: "检查上游健康,加重试"
+    root_cause: "内存用量超过限制,进程被内核直接杀死"
+    fix_steps: "排查泄漏点,加内存限制,控制并发"
+  - title: "内存泄漏"
+    root_cause: "对象只申请不释放,内存曲线单调上涨直到耗尽"
+    fix_steps: "抓 heap profile 对比增量,修引用未释放的代码"
+  - title: "GC 频繁停顿"
+    root_cause: "垃圾回收压力大,服务周期性卡顿但内存并未耗尽"
+    fix_steps: "调 GC 参数,减少临时对象分配,降堆大小"
+  # ── 簇C:数据库 ───────────────────────────────
   - title: "数据库连接池耗尽"
-    root_cause: "慢查询占满连接池"
-    fix_steps: "优化慢查询,扩连接池"
+    root_cause: "慢查询占满连接池,新请求排队等不到连接"
+    fix_steps: "优化慢查询,扩连接池,加获取超时"
+  - title: "数据库连接超时"
+    root_cause: "到数据库的 TCP 建连迟迟无响应,网络或数据库负载异常"
+    fix_steps: "查网络链路,看数据库负载,调连接超时参数"
+  - title: "数据库死锁"
+    root_cause: "两个事务互相持有对方需要的行锁,循环等待被数据库回滚"
+    fix_steps: "统一加锁顺序,缩短事务,重试被回滚的事务"
+  # ── 簇D:网关/上游 ─────────────────────────────
+  - title: "上游 502 网关错误"
+    root_cause: "上游进程崩溃或无响应,网关拿到无效回包"
+    fix_steps: "检查上游健康,加重试,看上游崩溃日志"
+  - title: "上游 504 网关超时"
+    root_cause: "上游处理时间超过网关等待上限,连接被网关掐断"
+    fix_steps: "优化上游耗时,调大网关超时,异步化慢操作"
+  - title: "上游限流 429"
+    root_cause: "请求量超过上游配额,被限流组件直接拒绝"
+    fix_steps: "申请扩配额,客户端加退避重试,削峰填谷"
+  # ── 簇E:CPU ─────────────────────────────────
+  - title: "CPU 打满"
+    root_cause: "计算量异常把 CPU 使用率顶到 100%,请求排队"
+    fix_steps: "火焰图定位热点函数,限流保护,扩容"
+  - title: "正则回溯灾难"
+    root_cause: "灾难性正则回溯让单请求吃掉整核 CPU,上线新规则后突发"
+    fix_steps: "重写危险正则,加匹配超时,回滚规则变更"
+  - title: "进程空转死循环"
+    root_cause: "逻辑缺陷导致循环退出条件永不满足,进程活着但不再处理请求"
+    fix_steps: "抓调用栈定位循环,加迭代上限与心跳检测"
+  # ── 簇F:网络/证书 ─────────────────────────────
+  - title: "SSL 证书过期"
+    root_cause: "TLS 证书到有效期,客户端校验失败拒绝握手"
+    fix_steps: "更换证书,接入自动续期,加到期监控"
+  - title: "DNS 解析失败"
+    root_cause: "域名解析不出 IP,请求在名字解析阶段就失败"
+    fix_steps: "查 DNS 服务与解析配置,加本地缓存兜底"
+  - title: "连接被拒绝"
+    root_cause: "目标端口没有进程监听,握手被直接拒绝 connection refused"
+    fix_steps: "确认目标服务存活与监听端口,查防火墙规则"
+  # ── 簇G:中间件 ───────────────────────────────
+  - title: "Kafka 消费积压"
+    root_cause: "消费速度跟不上生产速度,消息 lag 持续增长"
+    fix_steps: "扩消费者实例,批量拉取,排查慢处理逻辑"
+  - title: "Redis 连接数打满"
+    root_cause: "客户端连接数到 maxclients 上限,新连接被拒"
+    fix_steps: "改用连接池复用,调大上限,排查连接泄漏"
+  - title: "Redis 大 key 阻塞"
+    root_cause: "超大 key 的读写阻塞单线程,所有命令排队变慢"
+    fix_steps: "拆分大 key,异步删除,定期扫描大 key"
+  # ── 簇H:K8s ─────────────────────────────────
+  - title: "Pod CrashLoopBackOff"
+    root_cause: "容器启动即崩溃退出,K8s 反复重启进入退避循环"
+    fix_steps: "看容器退出日志,修启动依赖,查配置变更"
+  - title: "Pod OOMKilled"
+    root_cause: "容器内存超过 limit,被 kubelet 杀掉重启"
+    fix_steps: "调大 memory limit,压测确认真实用量"
+  - title: "节点 NotReady"
+    root_cause: "kubelet 失联或容器运行时故障,节点从调度池摘除"
+    fix_steps: "查 kubelet 与运行时状态,必要时排水重启节点"
 
 queries:
-  # 字面可命中(对照组)
-  - query: "连接池耗尽"
+  # ═══ 对照组:字面可命中,TF-IDF 的基本盘 ═══
+  - query: "连接池耗尽"              # [对照]
     expected: "数据库连接池耗尽"
-  - query: "内存泄漏排查"
-    expected: "OOM 内存溢出"
-  # 语义改写(实验组:字面上与目标卡片零重叠)
-  - query: "容量告急"
+  - query: "no space left on device"  # [对照] 真实报错原文
     expected: "磁盘空间不足"
-  - query: "服务无响应"
+  - query: "CrashLoopBackOff 排查"    # [对照]
+    expected: "Pod CrashLoopBackOff"
+  - query: "网关返回 502"             # [对照]
     expected: "上游 502 网关错误"
-  - query: "存储爆了"
+  - query: "证书过期了"               # [对照]
+    expected: "SSL 证书过期"
+  - query: "connection refused"       # [对照]
+    expected: "连接被拒绝"
+  - query: "消息 lag 涨得很快"         # [对照]
+    expected: "Kafka 消费积压"
+  - query: "memory limit 被超了"       # [对照]
+    expected: "Pod OOMKilled"
+  - query: "慢查询把连接都占了"         # [对照]
+    expected: "数据库连接池耗尽"
+  - query: "域名解析不出来"            # [对照]
+    expected: "DNS 解析失败"
+  - query: "CPU 100% 了"             # [对照]
+    expected: "CPU 打满"
+  - query: "磁盘 IO 利用率长期 100%"    # [对照]
+    expected: "磁盘 IO 打满"
+  - query: "OOMKilled 容器被杀"        # [对照]
+    expected: "Pod OOMKilled"
+  - query: "429 too many requests"    # [对照]
+    expected: "上游限流 429"
+  - query: "kubelet 心跳丢失"          # [对照]
+    expected: "节点 NotReady"
+  - query: "maxclients 到上限了"       # [对照]
+    expected: "Redis 连接数打满"
+
+  # ═══ 实验组:语义改写,零/极少字面重叠,主要靠 embedding ═══
+  - query: "容量告急"                # [实验]
     expected: "磁盘空间不足"
-  - query: "程序吃内存太多被杀"
+  - query: "存储爆了"                # [实验]
+    expected: "磁盘空间不足"
+  - query: "程序吃内存太多被系统杀"      # [实验]
     expected: "OOM 内存溢出"
+  - query: "内存只涨不降越跑越虚"       # [实验]
+    expected: "内存泄漏"
+  - query: "应用每隔一阵卡一下又恢复"    # [实验]
+    expected: "GC 频繁停顿"
+  - query: "应用等不到数据库连接"       # [实验]
+    expected: "数据库连接池耗尽"
+  - query: "数据库那头迟迟不应答"       # [实验]
+    expected: "数据库连接超时"
+  - query: "两个事务互相等对方不放"      # [实验]
+    expected: "数据库死锁"
+  - query: "后端接口大面积报错"         # [实验]
+    expected: "上游 502 网关错误"
+  - query: "等上游响应等到超时被掐"      # [实验]
+    expected: "上游 504 网关超时"
+  - query: "流量太大被挡在门外"         # [实验]
+    expected: "上游限流 429"
+  - query: "机器风扇狂转发烫"           # [实验]
+    expected: "CPU 打满"
+  - query: "昨天上线的匹配规则把速度拖垮了" # [实验]
+    expected: "正则回溯灾难"
+  - query: "进程还在跑但就是不干活"      # [实验]
+    expected: "进程空转死循环"
+  - query: "浏览器提示链接不安全"        # [实验]
+    expected: "SSL 证书过期"
+  - query: "名字服务查不出地址"         # [实验]
+    expected: "DNS 解析失败"
+  - query: "端口一拨就被弹回来"         # [实验]
+    expected: "连接被拒绝"
+  - query: "消息越攒越多消费不过来"      # [实验]
+    expected: "Kafka 消费积压"
+  - query: "缓存客户端说连不上了"        # [实验]
+    expected: "Redis 连接数打满"
+  - query: "清掉一个巨型对象后缓存突然恢复" # [实验]
+    expected: "Redis 大 key 阻塞"
+  - query: "容器起来又崩反复横跳"        # [实验]
+    expected: "Pod CrashLoopBackOff"
+  - query: "容器内存超限被平台重启"       # [实验]
+    expected: "Pod OOMKilled"
+  - query: "集群里一台机器失联了"        # [实验]
+    expected: "节点 NotReady"
+  - query: "读写全都很慢但 CPU 闲着"     # [实验]
+    expected: "磁盘 IO 打满"
+
+  # ═══ 干扰组:查询词与错误卡高度重叠,考验近邻区分 ═══
+  - query: "空间没满但建不了新文件"      # [干扰] 易误判磁盘空间不足,实际 inode
+    expected: "inode 耗尽"
+  - query: "海量小文件把文件系统撑爆了"    # [干扰] "撑爆"字面像空间不足,实际 inode
+    expected: "inode 耗尽"
+  - query: "进程还活着但内存曲线只升不降"  # [干扰] 有内存字样,但没被杀 → 泄漏不是 OOM
+    expected: "内存泄漏"
+  - query: "数据库一直不回话,建连反复失败"  # [干扰] 含"数据库",区分连接超时 vs 池耗尽
+    expected: "数据库连接超时"
+  - query: "上游一直不吐回包,页面全挂了"   # [干扰] "上游"字面像 504,但无超时语义 → 502
+    expected: "上游 502 网关错误"
+  - query: "响应太慢被网关掐断"          # [干扰] 含"网关",关键在慢 → 504 不是 502
+    expected: "上游 504 网关超时"
+  - query: "请求并发一高就全部排队等待"    # [干扰] 排队等计算资源 → CPU 打满不是 IO
+    expected: "CPU 打满"
+  - query: "删了个大对象之后命令忽然都变快了" # [干扰] "变快"是恢复信号,根因是大 key 阻塞
+    expected: "Redis 大 key 阻塞"

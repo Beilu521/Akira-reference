@@ -66,10 +66,18 @@ func runEvalRetrieval(casesPath string) error {
 	}
 
 	cards := make([]model.Knowledge, 0, len(ef.Cards))
+	titles := map[string]bool{}
 	for i, c := range ef.Cards {
 		cards = append(cards, model.Knowledge{
 			ID: int64(i + 1), Title: c.Title, RootCause: c.RootCause, FixSteps: c.FixSteps,
 		})
+		titles[c.Title] = true
+	}
+	// 期望标题笔误不会报错、只会把 P@1 双双拉低(数字静默失真)—— 先拦下来
+	for _, q := range ef.Queries {
+		if !titles[q.Expected] {
+			return fmt.Errorf("评测集第 %q 条查询引用了不存在的卡片标题 %q(笔误?)", q.Query, q.Expected)
+		}
 	}
 
 	embed := llm.NewEmbedClient(&cfg.LLM, cfg.Knowledge.EmbeddingModel).Embed
