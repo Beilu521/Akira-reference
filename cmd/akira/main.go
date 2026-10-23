@@ -150,7 +150,7 @@ func buildDeps(cfg *config.Config, mock bool) (*deps, error) {
 		// 相似历史检索:TF-IDF 找"以前最像这次的故障"(计划书预留的 query_similar_history)
 		toolList = append(toolList, &tools.QuerySimilarHistoryTool{Store: s})
 
-		// 进化闭环:知识库门面(向量三级缓存/持久化/降级都封装在 Index 里)
+		// 进化闭环:知识库门面(向量三级缓存/持久化/降级/模型版本守卫都封装在 Index 里)
 		var persist knowledge.EmbedStore
 		if es, ok := store.(knowledge.EmbedStore); ok {
 			persist = es // SQLiteStore 支持向量持久化
@@ -159,7 +159,7 @@ func buildDeps(cfg *config.Config, mock bool) (*deps, error) {
 		if cfg.Knowledge.EmbeddingModel != "" {
 			embed = llm.NewEmbedClient(&cfg.LLM, cfg.Knowledge.EmbeddingModel).Embed
 		}
-		kb = knowledge.NewIndex(s, embed, persist)
+		kb = knowledge.NewIndex(s, embed, persist, cfg.Knowledge.EmbeddingModel)
 		toolList = append(toolList,
 			&tools.SaveKnowledgeTool{KB: kb},
 			&tools.SearchKnowledgeTool{KB: kb},

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"akira-reference/internal/config"
+	"akira-reference/internal/metrics"
 )
 
 // EmbedClient 向量化客户端:调 OpenAI 兼容的 /embeddings 接口,
@@ -67,25 +68,31 @@ func (c *EmbedClient) Embed(ctx context.Context, texts []string) ([][]float64, e
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		metrics.RecordEmbedRequest("error", 0)
 		return nil, fmt.Errorf("请求 embeddings 失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		metrics.RecordEmbedRequest("error", 0)
 		return nil, fmt.Errorf("读响应失败: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		metrics.RecordEmbedRequest("error", 0)
 		return nil, fmt.Errorf("embeddings 返回状态码 %d: %s", resp.StatusCode, string(data))
 	}
 
 	var result embedResponse
 	if err := json.Unmarshal(data, &result); err != nil {
+		metrics.RecordEmbedRequest("error", 0)
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 	if len(result.Data) != len(texts) {
+		metrics.RecordEmbedRequest("error", 0)
 		return nil, fmt.Errorf("向量条数不符: 期望 %d 实际 %d", len(texts), len(result.Data))
 	}
+	metrics.RecordEmbedRequest("ok", result.Usage.TotalTokens)
 	// 协议不保证 data 按请求顺序返回,带 index —— 按 index 排序对齐
 	sort.Slice(result.Data, func(i, j int) bool { return result.Data[i].Index < result.Data[j].Index })
 	out := make([][]float64, len(texts))

@@ -181,7 +181,7 @@ func TestRetrieveForPrompt(t *testing.T) {
 	SaveAuto(context.Background(), store, model.Knowledge{
 		Signature: "s1", Title: "docker OOM", RootCause: "内存超限", FixSteps: "调大 limit",
 	})
-	idx := NewIndex(store, nil, nil) // 纯 TF-IDF 检索
+	idx := NewIndex(store, nil, nil, "") // 纯 TF-IDF 检索(未配 embedding)
 
 	block := idx.RetrieveForPrompt(context.Background(), "docker OOMKilled again", 3)
 	if block == "" {
@@ -196,7 +196,7 @@ func TestRetrieveForPrompt(t *testing.T) {
 	}
 
 	// 空库 → 空串(prompt 不留空段落)
-	if got := NewIndex(newFakeStore(), nil, nil).RetrieveForPrompt(context.Background(), "anything", 3); got != "" {
+	if got := NewIndex(newFakeStore(), nil, nil, "").RetrieveForPrompt(context.Background(), "anything", 3); got != "" {
 		t.Errorf("空库应返回空串,实际 %q", got)
 	}
 }

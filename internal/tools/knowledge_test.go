@@ -51,7 +51,7 @@ func (f *kbFakeStore) IncrementKnowledgeHit(id int64) error {
 // TestSaveKnowledgeTool 验证:Agent 存卡片 → 签名自动生成 → 再次存相似内容提示合并
 func TestSaveKnowledgeTool(t *testing.T) {
 	store := newKbFakeStore()
-	tool := &SaveKnowledgeTool{KB: knowledge.NewIndex(store, nil, nil)}
+	tool := &SaveKnowledgeTool{KB: knowledge.NewIndex(store, nil, nil, "")}
 
 	result, err := tool.Execute(map[string]interface{}{
 		"rule_id":    "docker_oom",
@@ -86,7 +86,7 @@ func TestSearchKnowledgeTool(t *testing.T) {
 	store := newKbFakeStore()
 	SaveKnowledgeForTest(store, "docker OOM 内存超限", "内存限制过低")
 
-	tool := &SearchKnowledgeTool{KB: knowledge.NewIndex(store, nil, nil)}
+	tool := &SearchKnowledgeTool{KB: knowledge.NewIndex(store, nil, nil, "")}
 	result, err := tool.Execute(map[string]interface{}{"query": "docker OOMKilled 内存超限"})
 	if err != nil {
 		t.Fatalf("执行失败: %v", err)
@@ -95,7 +95,7 @@ func TestSearchKnowledgeTool(t *testing.T) {
 		t.Errorf("应检索到已有经验,输出: %s", result)
 	}
 
-	empty := &SearchKnowledgeTool{KB: knowledge.NewIndex(newKbFakeStore(), nil, nil)}
+	empty := &SearchKnowledgeTool{KB: knowledge.NewIndex(newKbFakeStore(), nil, nil, "")}
 	result2, err := empty.Execute(map[string]interface{}{"query": "anything"})
 	if err != nil {
 		t.Fatal(err)

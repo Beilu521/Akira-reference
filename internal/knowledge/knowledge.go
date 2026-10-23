@@ -32,10 +32,11 @@ type Store interface {
 	IncrementKnowledgeHit(id int64) error
 }
 
-// EmbedStore 支持向量持久化的知识库(可选能力):实现它,检索时只对新卡片调 embedding API
+// EmbedStore 支持向量持久化的知识库(可选能力):实现它,检索时只对新卡片调 embedding API。
+// 签名带 embedModel:向量与生成它的模型绑定存储,换模型后旧向量自动失效重算(版本守卫)。
 type EmbedStore interface {
 	Store
-	UpdateKnowledgeEmbedding(id int64, vec []float64) error
+	UpdateKnowledgeEmbedding(id int64, vec []float64, embedModel string) error
 }
 
 // EmbedFunc 向量化函数:把一批文本变成等长的稠密向量(llm.EmbedClient.Embed 与之签名匹配)。
@@ -55,16 +56,18 @@ type Scored struct {
 //   - 向量缓存:内存 → SQLite BLOB → embedding API,同一张卡片一辈子只调一次 API
 //   - 复盘入库:SaveAuto 签名/内容去重合并
 type Index struct {
-	store   Store
-	embed   EmbedFunc
-	persist EmbedStore          // 可选:向量持久化;nil = 算完只进内存
-	mu      sync.Mutex          // 保护 mem;ensureVectors 期间持锁跨网络调用 —— 检索本就串行(分析 worker),无并发损失
-	mem     map[int64][]float64 // 内存向量缓存:cardID → 向量
+	store      Store
+	embed      EmbedFunc
+	persist    EmbedStore          // 可选:向量持久化;nil = 算完只进内存
+	embedModel string              // 当前 embedding 模型名(版本守卫:与卡片向量的模型不匹配即失效重算)
+	mu         sync.Mutex          // 保护 mem;ensureVectors 期间持锁跨网络调用 —— 检索本就串行(分析 worker),无并发损失
+	mem        map[int64][]float64 // 内存向量缓存:cardID → 向量
 }
 
-// NewIndex 建知识库门面;persist 可为 nil(存储不支持向量持久化时)
-func NewIndex(store Store, embed EmbedFunc, persist EmbedStore) *Index {
-	return &Index{store: store, embed: embed, persist: persist, mem: map[int64][]float64{}}
+// NewIndex 建知识库门面;persist 可为 nil(存储不支持向量持久化时)。
+// embedModel 为当前使用的 embedding 模型名,用于版本守卫。
+func NewIndex(store Store, embed EmbedFunc, persist EmbedStore, embedModel string) *Index {
+	return &Index{store: store, embed: embed, persist: persist, embedModel: embedModel, mem: map[int64][]float64{}}
 }
 
 // Search 检索 top-k 相似卡片
@@ -131,12 +134,19 @@ func (x *Index) ensureVectors(ctx context.Context, cards []model.Knowledge, quer
 	for _, c := range cards {
 		if v, ok := x.mem[c.ID]; ok {
 			res[c.ID] = v
+			metrics.EmbeddingVectorSource.WithLabelValues("memory").Inc()
 			continue
 		}
-		if len(c.Embedding) > 0 { // 持久化 BLOB 命中:启动后首次,顺手放进内存
+		// 版本守卫:向量存在但模型不匹配(换过 embedding 模型)→ 视为失效,重算
+		stale := c.EmbedModel != "" && c.EmbedModel != x.embedModel
+		if len(c.Embedding) > 0 && !stale { // 持久化 BLOB 命中:启动后首次,顺手放进内存
 			x.mem[c.ID] = c.Embedding
 			res[c.ID] = c.Embedding
+			metrics.EmbeddingVectorSource.WithLabelValues("blob").Inc()
 			continue
+		}
+		if stale {
+			slog.Warn("embedding 模型已变更,重算该卡片向量", "card_id", c.ID, "old", c.EmbedModel, "new", x.embedModel)
 		}
 		missing = append(missing, c)
 	}
@@ -159,8 +169,9 @@ func (x *Index) ensureVectors(ctx context.Context, cards []model.Knowledge, quer
 		v := vecs[i]
 		res[c.ID] = v
 		x.mem[c.ID] = v
+		metrics.EmbeddingVectorSource.WithLabelValues("api").Inc()
 		if x.persist != nil {
-			if perr := x.persist.UpdateKnowledgeEmbedding(c.ID, v); perr != nil {
+			if perr := x.persist.UpdateKnowledgeEmbedding(c.ID, v, x.embedModel); perr != nil {
 				slog.Warn("向量持久化失败(重启后需重算)", "card_id", c.ID, "err", perr)
 			}
 		}

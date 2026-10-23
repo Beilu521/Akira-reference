@@ -60,7 +60,28 @@ var (
 		Name: "akira_knowledge_hits_total",
 		Help: "知识库经验被检索复用的总次数",
 	})
+
+	// EmbedRequestsTotal embedding API 请求总数(按成败分维度)——向量化也是钱,可观测
+	EmbedRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "akira_embedding_requests_total",
+		Help: "embedding API 请求总数",
+	}, []string{"result"})
+
+	// EmbeddingVectorSource 检索向量的来源分布(memory/blob/api)。
+	// "api" 占比应趋近于零 —— 同一张卡片一辈子只调一次 embedding API,靠三级缓存兑现
+	EmbeddingVectorSource = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "akira_embedding_vector_source_total",
+		Help: "检索向量的来源分布(memory 缓存/blob 持久化/api 调用)",
+	}, []string{"source"})
 )
+
+// RecordEmbedRequest embedding 包打点用:记录一次向量化请求的成败和 token 消耗
+func RecordEmbedRequest(result string, tokens int) {
+	EmbedRequestsTotal.WithLabelValues(result).Inc()
+	if tokens > 0 {
+		LLMTokensTotal.Add(float64(tokens))
+	}
+}
 
 // RecordLLMRequest llm 包打点用:记录一次请求的成败和 token 消耗
 func RecordLLMRequest(result string, tokens int) {

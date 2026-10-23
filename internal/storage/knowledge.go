@@ -25,10 +25,10 @@ var (
 func (s *SQLiteStore) SaveKnowledge(k model.Knowledge) (int64, error) {
 	now := time.Now().Format(time.RFC3339)
 	res, err := s.db.Exec(
-		`INSERT INTO knowledge (created_at, updated_at, signature, title, root_cause, fix_steps, severity, hit_count, source, embedding)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO knowledge (created_at, updated_at, signature, title, root_cause, fix_steps, severity, hit_count, source, embedding, embedding_model)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		now, now, k.Signature, k.Title, k.RootCause, k.FixSteps, k.Severity, k.HitCount, k.Source,
-		embedToBlob(k.Embedding),
+		embedToBlob(k.Embedding), k.EmbedModel,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("写入知识卡片失败: %w", err)
@@ -44,7 +44,7 @@ func (s *SQLiteStore) SaveKnowledge(k model.Knowledge) (int64, error) {
 // 单机知识库规模在几百张以内,全量拉回内存排序绰绰有余 —— 又一个"规模不到,不上重武器"的取舍
 func (s *SQLiteStore) ListKnowledge(limit int) ([]model.Knowledge, error) {
 	rows, err := s.db.Query(
-		`SELECT id, created_at, updated_at, signature, title, root_cause, fix_steps, severity, hit_count, source, embedding
+		`SELECT id, created_at, updated_at, signature, title, root_cause, fix_steps, severity, hit_count, source, embedding, embedding_model
 		 FROM knowledge ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("查询知识库失败: %w", err)
@@ -57,7 +57,7 @@ func (s *SQLiteStore) ListKnowledge(limit int) ([]model.Knowledge, error) {
 		var created, updated string
 		var embedding []byte // NULL → nil → 无向量(老卡片或未配 embedding)
 		if err := rows.Scan(&k.ID, &created, &updated, &k.Signature, &k.Title,
-			&k.RootCause, &k.FixSteps, &k.Severity, &k.HitCount, &k.Source, &embedding); err != nil {
+			&k.RootCause, &k.FixSteps, &k.Severity, &k.HitCount, &k.Source, &embedding, &k.EmbedModel); err != nil {
 			return nil, fmt.Errorf("读取知识卡片失败: %w", err)
 		}
 		k.CreatedAt, _ = time.Parse(time.RFC3339, created)
@@ -71,10 +71,11 @@ func (s *SQLiteStore) ListKnowledge(limit int) ([]model.Knowledge, error) {
 	return out, nil
 }
 
-// UpdateKnowledgeEmbedding 向量算完后回填持久化(重启后不用再花钱重算)
-func (s *SQLiteStore) UpdateKnowledgeEmbedding(id int64, vec []float64) error {
-	_, err := s.db.Exec(`UPDATE knowledge SET embedding = ?, updated_at = ? WHERE id = ?`,
-		embedToBlob(vec), time.Now().Format(time.RFC3339), id)
+// UpdateKnowledgeEmbedding 向量算完后回填持久化(重启后不用再花钱重算)。
+// 同时记录生成向量的模型名——版本守卫的数据来源。
+func (s *SQLiteStore) UpdateKnowledgeEmbedding(id int64, vec []float64, embedModel string) error {
+	_, err := s.db.Exec(`UPDATE knowledge SET embedding = ?, embedding_model = ?, updated_at = ? WHERE id = ?`,
+		embedToBlob(vec), embedModel, time.Now().Format(time.RFC3339), id)
 	if err != nil {
 		return fmt.Errorf("更新向量失败: %w", err)
 	}

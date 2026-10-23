@@ -69,6 +69,13 @@ func New(path string) (*SQLiteStore, error) {
 			return nil, fmt.Errorf("迁移 knowledge.embedding 列失败: %w", err)
 		}
 	}
+	// 同款迁移:embedding_model 列(版本守卫用——记录向量由哪个模型生成)
+	if _, err := db.Exec(`ALTER TABLE knowledge ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("迁移 knowledge.embedding_model 列失败: %w", err)
+		}
+	}
 	return &SQLiteStore{db: db}, nil
 }
 
