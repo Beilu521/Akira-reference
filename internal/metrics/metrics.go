@@ -16,6 +16,13 @@ import (
 )
 
 var (
+	// ScannedLines 累计扫描的日志行数(成本故事的分母:
+	// 配合 LLMTokensTotal 能算出"每百万行日志烧多少 token")
+	ScannedLines = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "akira_lines_scanned_total",
+		Help: "累计扫描的日志行数",
+	})
+
 	// MatchesTotal 规则命中总次数(按规则/组件/级别分维度)
 	// 注意:这是去重前的原始命中数,配合 AlertsTotal(去重后)能算出告警收敛率
 	MatchesTotal = promauto.NewCounterVec(prometheus.CounterOpts{

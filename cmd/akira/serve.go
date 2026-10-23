@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	_ "embed" // go:embed dashboard.html([]byte 形式只需 blank import)
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -19,9 +20,16 @@ import (
 	"akira-reference/internal/detector"
 	"akira-reference/internal/metrics"
 	"akira-reference/internal/model"
+	"akira-reference/internal/stats"
+	"akira-reference/internal/storage"
 
 	"github.com/spf13/cobra"
 )
+
+// dashboardHTML 内嵌的单文件仪表盘(go:embed 编进二进制,零外部文件、零 npm 依赖)
+//
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // ===== serve 模式:把 Akira 变成常驻 HTTP 服务 =====
 //
@@ -29,7 +37,9 @@ import (
 // 这是"日志 Agent"走向平台化的一步,也是 AI Infra 方向最典型的服务形态。
 //
 // 端点:
+//   GET  /              Web 仪表盘(单文件内嵌页,轮询 /api/stats 与 /api/alerts)
 //   GET  /healthz      探活(负载均衡/K8s probe 用)
+//   GET  /api/stats    成本/告警统计聚合(仪表盘数据源)
 //   GET  /api/alerts   最近告警列表(需要 config 开启 storage)
 //   POST /api/analyze  对指定日志文件跑规则扫描;deep=true 额外走 Agent 深度分析
 //   GET  /metrics      Prometheus 指标(复用 metrics 包的 Handler)
@@ -113,7 +123,7 @@ func runServe(addr string) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	fmt.Printf("serve 已启动: http://localhost%s (healthz /api/alerts /api/analyze /metrics)\n", addr)
+	fmt.Printf("serve 已启动: http://localhost%s (仪表盘 / · healthz · /api/stats · /api/alerts · /api/analyze · /metrics)\n", addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -125,14 +135,18 @@ func runServe(addr string) error {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /{$}", s.auth(s.handleDashboard))
 	mux.HandleFunc("GET /api/alerts", s.auth(s.handleAlerts))
+	mux.HandleFunc("GET /api/stats", s.auth(s.handleStats))
 	mux.HandleFunc("POST /api/analyze", s.auth(s.handleAnalyze))
 	mux.Handle("GET /metrics", metrics.Handler())
 	return mux
 }
 
-// auth Bearer 令牌鉴权中间件(仅保护 /api/*;token 未配置时直通)
-// 用 constant-time 比较:逐字节短路会在响应时间上泄露"前缀对了多少位"
+// auth Bearer 令牌鉴权中间件(仅保护 /api/* 与仪表盘;token 未配置时直通)
+// 用 constant-time 比较:逐字节短路会在响应时间上泄露"前缀对了多少位"。
+// 额外接受 ?token= 查询参数:浏览器直接打开仪表盘时没法带 Authorization 头,
+// 页面拿到 token 后再由前端 JS 用标准 Bearer 头调 /api/*(访问日志只记 Path 不记 query,不泄露)
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.token == "" {
@@ -143,8 +157,11 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 		if got == "" {
 			got = r.Header.Get("X-Auth-Token")
 		}
+		if got == "" {
+			got = r.URL.Query().Get("token")
+		}
 		if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未授权:缺少或错误的令牌"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未授权:缺少或错误的令牌(可在 URL 追加 ?token=xxx 访问仪表盘)"})
 			return
 		}
 		next(w, r)
@@ -184,6 +201,93 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		alerts = []model.Alert{} // 空结果输出 [] 而不是 null,对调用方更友好
 	}
 	writeJSON(w, http.StatusOK, alerts)
+}
+
+// handleDashboard 内嵌仪表盘(单文件 HTML,数据由前端 JS 轮询 /api/stats 与 /api/alerts)
+func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(dashboardHTML)
+}
+
+// hourCount 24 小时告警时间线的一个桶
+type hourCount struct {
+	Hour  string `json:"hour"` // 展示标签,如 "10-23 14时"
+	Count int    `json:"count"`
+}
+
+// knowledgeSummary 知识库观测两项(经验收敛的数字)
+type knowledgeSummary struct {
+	Cards  int   `json:"cards"`
+	Reuses int64 `json:"reuses"`
+}
+
+// statsResponse GET /api/stats 的响应体:仪表盘一次拉齐全部展示数据。
+// 数字全部来自 SQLite 存档 —— serve 进程重启、甚至 watch 没在跑,历史账本都在
+type statsResponse struct {
+	GeneratedAt      string             `json:"generated_at"`
+	Counters         map[string]int64   `json:"counters"`
+	AlertsByRule     []storage.RuleStat `json:"alerts_by_rule"`
+	AlertsByHour     []hourCount        `json:"alerts_by_hour"`
+	Knowledge        knowledgeSummary   `json:"knowledge"`
+	InterceptionRate *float64           `json:"interception_rate"` // 1 - 分析/扫描;nil = 尚无扫描数据
+}
+
+// handleStats 成本/告警统计聚合:stats 表 + alerts 聚合 + 知识库观测,一次查齐
+func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if s.deps.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "storage 未启用(config: storage.enabled)"})
+		return
+	}
+	sqlite, ok := s.deps.store.(*storage.SQLiteStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "当前存档实现不支持统计查询"})
+		return
+	}
+
+	resp := statsResponse{GeneratedAt: time.Now().Format(time.RFC3339), Knowledge: knowledgeSummary{}}
+
+	var err error
+	if resp.Counters, err = sqlite.ReadStats(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if resp.AlertsByRule, err = sqlite.AlertsByRule(8); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	resp.Knowledge.Cards, resp.Knowledge.Reuses, err = sqlite.KnowledgeStats()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// 24h 时间线:最近 1000 条里落在窗口内的按小时分桶,空桶补零(图形要连续)
+	const hours = 24
+	now := time.Now()
+	start := now.Add(-time.Duration(hours-1) * time.Hour).Truncate(time.Hour) // 窗口起点 = 23 小时前整点
+	alerts, err := sqlite.Recent(1000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	buckets := make(map[time.Time]int)
+	for _, a := range alerts {
+		if a.Time.Before(start) {
+			continue
+		}
+		buckets[a.Time.Truncate(time.Hour)]++
+	}
+	for i := 0; i < hours; i++ {
+		h := start.Add(time.Duration(i) * time.Hour)
+		resp.AlertsByHour = append(resp.AlertsByHour, hourCount{Hour: h.Format("01-02 15时"), Count: buckets[h]})
+	}
+
+	// 拦截率:成本叙事的核心数字(规则层拦下、没碰 LLM 的行占比)
+	if lines, analyses := resp.Counters[stats.KeyLinesScanned], resp.Counters[stats.KeyAnalyses]; lines > 0 {
+		rate := (1 - float64(analyses)/float64(lines)) * 100
+		resp.InterceptionRate = &rate
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAnalyze 规则扫描 + 可选深度分析

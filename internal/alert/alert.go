@@ -108,3 +108,24 @@ func (d *Dedup) Allow(ruleID string) bool {
 	d.last[ruleID] = now
 	return true
 }
+
+// Seed 用历史告警时间回填冷却状态(进程重启时的"失忆"修复)。
+// 冷却表只在内存:不回填的话,重启瞬间所有规则的冷却全部清零,
+// 重启前正在爆的同一故障会立刻再触发一轮通知 + LLM 分析。
+// 只回填仍在窗口内的记录(过期的本来就允许再告警);返回生效的规则数。
+func (d *Dedup) Seed(last map[string]time.Time) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := time.Now()
+	n := 0
+	for ruleID, t := range last {
+		if now.Sub(t) < d.cooldown {
+			// 取更近的时间:同规则可能已有本进程的新记录,不能被旧数据倒退覆盖
+			if cur, ok := d.last[ruleID]; !ok || t.After(cur) {
+				d.last[ruleID] = t
+				n++
+			}
+		}
+	}
+	return n
+}

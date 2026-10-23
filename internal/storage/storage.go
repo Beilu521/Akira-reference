@@ -56,7 +56,11 @@ func New(path string) (*SQLiteStore, error) {
 		source     TEXT NOT NULL DEFAULT 'auto',
 		embedding  BLOB
 	);
-	CREATE INDEX IF NOT EXISTS idx_knowledge_signature ON knowledge(signature);`
+	CREATE INDEX IF NOT EXISTS idx_knowledge_signature ON knowledge(signature);
+	CREATE TABLE IF NOT EXISTS stats (
+		key   TEXT PRIMARY KEY,
+		value INTEGER NOT NULL
+	);`
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("建表失败: %w", err)
@@ -134,4 +138,104 @@ func (s *SQLiteStore) Recent(limit int) ([]model.Alert, error) {
 // Close 关闭数据库连接
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// ===== 运行统计(stats 表:跨重启的成本数字)与告警聚合查询 =====
+
+// BumpStats 增量合并一批统计计数(UPSERT:不存在则插入,存在则累加)
+func (s *SQLiteStore) BumpStats(delta map[string]int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("开事务失败: %w", err)
+	}
+	defer tx.Rollback() // Commit 成功后 Rollback 是空操作
+	for k, v := range delta {
+		if _, err := tx.Exec(
+			`INSERT INTO stats (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = value + excluded.value`,
+			k, v,
+		); err != nil {
+			return fmt.Errorf("累加统计 %s 失败: %w", k, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ReadStats 读全部统计计数(键不存在时不出现在返回值里,读方按零值兜底)
+func (s *SQLiteStore) ReadStats() (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT key, value FROM stats`)
+	if err != nil {
+		return nil, fmt.Errorf("查询统计失败: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var k string
+		var v int64
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("读取统计行失败: %w", err)
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// LastAlertTimes 每条规则的最近一次告警时间(冷却状态恢复的数据源:
+// watch 重启后据此回填冷却器,重启瞬间不会对同一故障再轰炸一轮)
+func (s *SQLiteStore) LastAlertTimes() (map[string]time.Time, error) {
+	rows, err := s.db.Query(`SELECT rule_id, MAX(created_at) FROM alerts GROUP BY rule_id`)
+	if err != nil {
+		return nil, fmt.Errorf("查询规则最近告警失败: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var ruleID, created string
+		if err := rows.Scan(&ruleID, &created); err != nil {
+			return nil, fmt.Errorf("读取最近告警行失败: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			out[ruleID] = t
+		}
+	}
+	return out, rows.Err()
+}
+
+// RuleStat 按规则聚合的告警计数(成本报告与仪表盘的 TOP 图数据源)
+type RuleStat struct {
+	RuleID   string `json:"rule_id"`
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
+}
+
+// AlertsByRule 全量告警按规则聚合,条数倒序,最多 limit 条
+func (s *SQLiteStore) AlertsByRule(limit int) ([]RuleStat, error) {
+	rows, err := s.db.Query(
+		`SELECT rule_id, severity, COUNT(*) AS n FROM alerts
+		 GROUP BY rule_id, severity ORDER BY n DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("按规则聚合告警失败: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RuleStat
+	for rows.Next() {
+		var r RuleStat
+		if err := rows.Scan(&r.RuleID, &r.Severity, &r.Count); err != nil {
+			return nil, fmt.Errorf("读取聚合行失败: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AlertCount 告警总条数(成本报告的头部数字)
+func (s *SQLiteStore) AlertCount() (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM alerts`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("统计告警总数失败: %w", err)
+	}
+	return n, nil
 }

@@ -25,6 +25,7 @@ import (
 	"akira-reference/internal/llm"
 	"akira-reference/internal/metrics"
 	"akira-reference/internal/model"
+	"akira-reference/internal/stats"
 	"akira-reference/internal/storage"
 	"akira-reference/internal/tools"
 	"akira-reference/internal/watcher"
@@ -51,6 +52,7 @@ func main() {
   watch    常驻监控:tail -f → 规则命中 → 告警聚合 → Agent 异步分析(阶段4B+4C)
   analyze  一次性分析:扫文件(或时间区间)出汇总 + 根因综合报告(阶段4A/4B)
   history  查看历史告警存档(阶段4C)
+  cost     成本报告:扫描/命中/告警/LLM token 的累计账本(双层过滤的成本凭证)
   eval     规则评测:精确率/召回率/F1(改规则前先跑一遍防回归)
   eval-loghub  真实数据集评测(LogHub,按模板标注)
   serve    HTTP 服务模式:REST API + Prometheus 指标端点
@@ -67,7 +69,7 @@ func main() {
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		setupLogger()
 	}
-	root.AddCommand(demoCmd(), watchCmd(), analyzeCmd(), historyCmd(), evalCmd(), evalLoghubCmd(), evalRetrievalCmd(), serveCmd(), mcpCmd(), initCmd(), versionCmd())
+	root.AddCommand(demoCmd(), watchCmd(), analyzeCmd(), historyCmd(), costCmd(), evalCmd(), evalLoghubCmd(), evalRetrievalCmd(), serveCmd(), mcpCmd(), initCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -361,7 +363,7 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 
 	// 2. 呈现层:consoleUI(默认,逐条打印)/ tuiUI(--tui,Bubble Tea 仪表盘)
 	//    业务逻辑只调 watchUI 接口 —— 以后加 Web UI,再多写一个实现即可
-	stats := newWatchStats()
+	wstats := newWatchStats() // 本进程会话统计(TUI 展示用);跨重启的累计账在 stats.Tracker 落盘
 	printMu := &sync.Mutex{}
 	var ui watchUI
 	var notifiers []alert.Notifier
@@ -373,10 +375,10 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 	}
 	if useTUI {
 		prog = tea.NewProgram(
-			newTuiModel(stats, d.llm, label, cfg.LLM.Model),
+			newTuiModel(wstats, d.llm, label, cfg.LLM.Model),
 			tea.WithAltScreen(),
 		)
-		ui = &tuiUI{stats: stats, prog: prog}
+		ui = &tuiUI{stats: wstats, prog: prog}
 		go func() {
 			_, _ = prog.Run() // 阻塞直到 q / Ctrl+C / Quit
 			close(progDone)
@@ -415,6 +417,23 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 	// 告警冷却:同规则在窗口内只告警/分析一次(成本收敛,计划书"风险与对策"的落地)
 	cooldown := time.Duration(cfg.Alert.CooldownSeconds) * time.Second
 	dedup := alert.NewDedup(cooldown)
+	// 冷却状态恢复:从存档回填仍在窗口内的记录 —— 重启不会对同故障再轰炸一轮
+	if sqlite, ok := d.store.(*storage.SQLiteStore); ok {
+		if last, err := sqlite.LastAlertTimes(); err != nil {
+			slog.Warn("冷却状态恢复失败,按空冷却启动", "err", err)
+		} else if n := dedup.Seed(last); n > 0 {
+			slog.Info("冷却状态已从存档恢复", "rules", n, "cooldown", cooldown)
+		}
+	}
+
+	// 运行统计落盘:扫描行数/命中/告警/分析/token 进 SQLite,
+	// akira cost 与仪表盘报的是重启也丢不了的累计数字
+	var tracker *stats.Tracker
+	if sqlite, ok := d.store.(*storage.SQLiteStore); ok {
+		tracker = stats.NewTracker(sqlite)
+		tracker.Start(30 * time.Second)
+		defer tracker.Close()
+	}
 
 	// 3.5 规则热更新:轮询 config 文件 mtime,变了就重载规则并原子替换(不重启进程)
 	// 用 mtime 轮询而不是 fsnotify:和日志 tail 的轮询路线保持一致,标准库、好测试;
@@ -466,7 +485,12 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 
 			ui.AnalysisStarted(p.m.Rule.ID)
 			start := time.Now()
+			tokensBefore := d.llm.UsedTokens()
 			report, err := d.ag.Run(ctx, watchPrompt(p.m, p.file, p.count, kb))
+			if tracker != nil {
+				tracker.Add(stats.KeyLLMTokens, d.llm.UsedTokens()-tokensBefore)
+				tracker.Add(stats.KeyAnalyses, 1)
+			}
 			result := "ok"
 			if err != nil {
 				result = "error"
@@ -502,6 +526,9 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 			}
 		}
 		metrics.AlertsTotal.Inc()
+		if tracker != nil {
+			tracker.Add(stats.KeyAlerts, 1)
+		}
 		ui.AlertEmitted(a)
 
 		// 告警落库(report 先空着,分析完 UPDATE 回填)
@@ -535,10 +562,17 @@ func runWatch(paths []string, fromStart, useTUI bool) error {
 	for tl := range merged {
 		lineNos[tl.path]++
 		ui.LineSeen()
+		metrics.ScannedLines.Inc()
+		if tracker != nil {
+			tracker.Add(stats.KeyLinesScanned, 1)
+		}
 		for _, m := range d.engine.Match(tl.line) {
 			m.LineNo = lineNos[tl.path]
 			// 打点:聚合/去重前的原始命中(和 AlertsTotal 对比可算告警收敛率)
 			metrics.MatchesTotal.WithLabelValues(m.Rule.ID, m.Rule.Component, m.Rule.Severity).Inc()
+			if tracker != nil {
+				tracker.Add(stats.KeyRuleMatches, 1)
+			}
 			ui.Hit(m)
 
 			if agg != nil {

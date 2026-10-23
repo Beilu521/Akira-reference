@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Akira · 日志智能监控台</title>
+<style>
+  /* 暗色监控台主题:变量集中,和 CLI/TUI 的气质一脉相承 */
+  :root {
+    --bg: #0b0f14;          /* 页面底色 */
+    --panel: #11161d;       /* 卡片底色 */
+    --panel2: #151c25;      /* 卡片内嵌块 */
+    --line: #1e2933;        /* 描边 */
+    --text: #d7e0ea;        /* 主文字 */
+    --dim: #7b8b9e;         /* 次级文字 */
+    --green: #4ade80;       /* 健康色 */
+    --red: #f87171;         /* critical */
+    --amber: #fbbf24;       /* warning */
+    --blue: #60a5fa;        /* info */
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 500px at 70% -10%, #12202e33, transparent), var(--bg);
+    color: var(--text);
+    font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    padding: 20px clamp(16px, 4vw, 48px) 40px;
+  }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 20px; letter-spacing: 2px; }
+  .logo b { color: var(--green); }
+  .sub { color: var(--dim); font-size: 12px; }
+  .spacer { flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; display: inline-block; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.bad { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .updated { color: var(--dim); font-size: 12px; font-family: var(--mono); }
+
+  .grid { display: grid; gap: 14px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 14px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  }
+  .kpi .label { color: var(--dim); font-size: 12px; }
+  .kpi .value { font-family: var(--mono); font-size: 26px; font-weight: 700; margin-top: 2px;
+                font-variant-numeric: tabular-nums; }
+  .kpi .unit { font-size: 12px; color: var(--dim); font-weight: 400; margin-left: 3px; }
+
+  .row2 { grid-template-columns: 2fr 1fr; margin-bottom: 14px; }
+  @media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
+  .row2b { grid-template-columns: 1fr 1fr; margin-bottom: 14px; }
+  @media (max-width: 900px) { .row2b { grid-template-columns: 1fr; } }
+  h2 { font-size: 13px; color: var(--dim); font-weight: 600; margin-bottom: 12px; letter-spacing: 1px; }
+
+  /* 成本漏斗:一级级收窄的横条,直观看"行数被切掉" */
+  .funnel { display: flex; flex-direction: column; gap: 10px; }
+  .fstep { display: grid; grid-template-columns: 88px 1fr 150px; gap: 10px; align-items: center; }
+  .fstep .name { color: var(--dim); font-size: 12px; }
+  .fbar { height: 22px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+  .fbar i { display: block; height: 100%; border-radius: 5px; min-width: 2px;
+            transition: width .6s ease; }
+  .fstep .num { font-family: var(--mono); font-size: 12px; color: var(--text); text-align: right;
+                font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .fnum-0 { background: linear-gradient(90deg, #2d6a9f, #3b82f6); }
+  .fnum-1 { background: linear-gradient(90deg, #8a6d1f, var(--amber)); }
+  .fnum-2 { background: linear-gradient(90deg, #9c3d3d, var(--red)); }
+  .fnum-3 { background: linear-gradient(90deg, #2f7a4d, var(--green)); }
+
+  /* 拦截率:成本叙事的主角数字 */
+  .hero { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+  .hero .big { font-family: var(--mono); font-size: clamp(40px, 6vw, 58px); font-weight: 800;
+               color: var(--green); text-shadow: 0 0 24px #4ade8044; line-height: 1.1; }
+  .hero .cap { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .hero .tokens { margin-top: 10px; font-family: var(--mono); color: var(--blue); font-size: 13px; }
+
+  .rules .ritem { display: grid; grid-template-columns: 150px 1fr 60px; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .rules .rname { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rules .rbar { height: 12px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+  .rules .rbar i { display: block; height: 100%; border-radius: 3px; }
+  .rules .rcount { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--dim); }
+  .sev { font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; vertical-align: 1px; }
+  .sev-critical, .sev-error { background: #f8717122; color: var(--red); }
+  .sev-warning { background: #fbbf2422; color: var(--amber); }
+  .sev-info { background: #60a5fa22; color: var(--blue); }
+
+  svg text { fill: var(--dim); font-size: 10px; font-family: var(--mono); }
+  svg .bar { fill: url(#gbar); }
+  svg .axis { stroke: var(--line); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--dim); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 10px; border-bottom: 1px solid #18212b; }
+  td.t { font-family: var(--mono); color: var(--dim); white-space: nowrap; }
+  td.line { font-family: var(--mono); color: #a8b8c8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; width: 60%; }
+  .chip { font-size: 10px; padding: 1px 7px; border-radius: 8px; font-family: var(--mono); }
+
+  .empty { color: var(--dim); text-align: center; padding: 26px 10px; font-size: 13px; }
+  .empty code { font-family: var(--mono); color: var(--blue); background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+  footer { color: #55677a; font-size: 11px; margin-top: 18px; text-align: center; }
+  #err { display: none; margin: 6px 0 14px; padding: 8px 12px; border: 1px solid #f8717155;
+         background: #f8717111; color: var(--red); border-radius: 8px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="logo">AKIRA<b>.</b>日志智能监控台</div>
+    <div class="sub">双层过滤 · 规则粗筛切掉绝大部分日志,LLM 只看可疑行 —— 成本在这里变得可见</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="dot" id="dot"></span>
+  <span class="updated" id="updated">连接中…</span>
+</header>
+
+<div id="err"></div>
+
+<div class="grid kpis" id="kpis"></div>
+
+<div class="grid row2">
+  <div class="card">
+    <h2>成本漏斗 —— 每一层都把量切下来</h2>
+    <div class="funnel" id="funnel"></div>
+  </div>
+  <div class="card hero">
+    <h2>规则层拦截率</h2>
+    <div class="big" id="intercept">—</div>
+    <div class="cap">的日志行被规则层拦下,一行都没碰 LLM</div>
+    <div class="tokens" id="density"></div>
+  </div>
+</div>
+
+<div class="grid row2b">
+  <div class="card rules">
+    <h2>告警 TOP 规则(全量存档)</h2>
+    <div id="rules"></div>
+  </div>
+  <div class="card">
+    <h2>最近 24 小时告警时间线</h2>
+    <div id="timeline"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>最近告警(告警先行,报告由 Agent 异步回填)</h2>
+  <table>
+    <thead><tr><th style="width:150px">时间</th><th style="width:170px">规则</th><th style="width:90px">级别</th><th>日志行</th></tr></thead>
+    <tbody id="alertsBody"><tr><td colspan="4" class="empty">加载中…</td></tr></tbody>
+  </table>
+</div>
+
+<footer>Akira-reference · 数据来自 SQLite 存档(watch 运行累计)· 每 5 秒自动刷新 · 零前端依赖,图表为手写 SVG</footer>
+
+<script>
+"use strict";
+// 令牌可经 URL 携带(?token=xxx):浏览器打不开自定义 Header,拿到后转成标准 Bearer
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+async function api(path) {
+  const resp = await fetch(path, { headers: TOKEN ? { "Authorization": "Bearer " + TOKEN } : {} });
+  if (!resp.ok) throw new Error(path + " → HTTP " + resp.status);
+  return resp.json();
+}
+
+// 大数可读化:万以上用"万",和 CLI 端 akira cost 的口径一致
+function fmt(n) {
+  if (n == null) return "—";
+  if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(2) + "亿";
+  if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(1) + "万";
+  return n.toLocaleString("en-US");
+}
+const SEV_COLOR = { critical: "#f87171", error: "#f87171", warning: "#fbbf24", info: "#60a5fa" };
+const sevColor = s => SEV_COLOR[(s || "").toLowerCase()] || "#7b8b9e";
+
+function kpiCard(label, value, unit) {
+  return `<div class="card kpi"><div class="label">${label}</div>
+    <div class="value">${value}${unit ? `<span class="unit">${unit}</span>` : ""}</div></div>`;
+}
+
+function renderFunnel(c) {
+  const lines = c.lines_scanned || 0, matches = c.rule_matches || 0;
+  const alerts = c.alerts_emitted || 0, analyses = c.analyses || 0;
+  const steps = [
+    ["扫描日志", lines, "fnum-0", 100],
+    ["规则命中", matches, "fnum-1", lines > 0 ? Math.max(matches / lines * 100, 1.5) : 50],
+    ["发出告警", alerts, "fnum-2", lines > 0 ? Math.max(alerts / lines * 100, 1.5) : 25],
+    ["深度分析", analyses, "fnum-3", lines > 0 ? Math.max(analyses / lines * 100, 1.5) : 12],
+  ];
+  document.getElementById("funnel").innerHTML = steps.map(([name, n, cls, w]) =>
+    `<div class="fstep"><span class="name">${name}</span>
+       <div class="fbar"><i class="${cls}" style="width:${Math.min(w, 100)}%"></i></div>
+       <span class="num">${fmt(n)}${lines > 0 && n !== lines ? ` (${(n / lines * 100).toFixed(4)}%)` : ""}</span>
+     </div>`).join("");
+}
+
+// 24h 时间线:手写 SVG 柱状图(24 根柱,含零值空桶)
+function renderTimeline(buckets) {
+  const W = 560, H = 150, PAD = 22, BW = (W - PAD * 2) / buckets.length;
+  const max = Math.max(...buckets.map(b => b.count), 1);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="150" preserveAspectRatio="xMidYMid meet">
+    <defs><linearGradient id="gbar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2d5a8f"/></linearGradient></defs>
+    <line class="axis" x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}"/>`;
+  buckets.forEach((b, i) => {
+    const h = b.count / max * (H - PAD * 2);
+    const x = PAD + i * BW + 2, y = H - PAD - h;
+    s += `<rect class="bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(BW - 4).toFixed(1)}" height="${Math.max(h, b.count > 0 ? 2 : 0).toFixed(1)}" rx="2"><title>${b.hour}: ${b.count} 条</title></rect>`;
+    if (i % 6 === 0) s += `<text x="${(x + BW / 2 - 4).toFixed(1)}" y="${H - 6}" text-anchor="middle">${b.hour.split(" ")[0]}</text>`;
+  });
+  s += `<text x="${PAD}" y="12">峰值 ${max} 条/时</text></svg>`;
+  document.getElementById("timeline").innerHTML = s;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, ch =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+async function load() {
+  const dot = document.getElementById("dot");
+  const errBox = document.getElementById("err");
+  try {
+    const st = await api("/api/stats");
+    const c = st.counters || {};
+
+    document.getElementById("kpis").innerHTML =
+      kpiCard("累计扫描日志", fmt(c.lines_scanned || 0), "行") +
+      kpiCard("规则命中", fmt(c.rule_matches || 0), "次") +
+      kpiCard("发出告警", fmt(c.alerts_emitted || 0), "条") +
+      kpiCard("深度分析", fmt(c.analyses || 0), "次") +
+      kpiCard("LLM 消耗", fmt(c.llm_tokens || 0), "tokens") +
+      kpiCard("知识卡片", fmt(st.knowledge?.cards ?? 0), `张 / 复用 ${fmt(st.knowledge?.reuses ?? 0)} 次`);
+
+    renderFunnel(c);
+
+    const ir = st.interception_rate;
+    document.getElementById("intercept").textContent = ir == null ? "—" : ir.toFixed(4) + "%";
+    document.getElementById("density").textContent =
+      (c.lines_scanned > 0 && c.llm_tokens != null)
+        ? `每百万行日志 ≈ ${(c.llm_tokens * 1e6 / c.lines_scanned).toFixed(0)} tokens`
+        : "跑起 akira watch 后这里是成本密度";
+
+    const rules = st.alerts_by_rule || [];
+    const maxR = Math.max(...rules.map(r => r.count), 1);
+    document.getElementById("rules").innerHTML = rules.length
+      ? rules.map(r => `<div class="ritem">
+          <span class="rname">${esc(r.rule_id)}<span class="sev sev-${esc(r.severity).toLowerCase()}">${esc(r.severity)}</span></span>
+          <div class="rbar"><i style="width:${(r.count / maxR * 100).toFixed(1)}%;background:${sevColor(r.severity)}"></i></div>
+          <span class="rcount">${fmt(r.count)}</span></div>`).join("")
+      : `<div class="empty">存档中还没有告警</div>`;
+
+    renderTimeline(st.alerts_by_hour || []);
+
+    const al = await api("/api/alerts?limit=8");
+    document.getElementById("alertsBody").innerHTML = al.length ? al.map(a =>
+      `<tr><td class="t">${esc((a.time || "").replace("T", " ").slice(0, 19))}</td>
+         <td class="t">${esc(a.rule_id)}</td>
+         <td><span class="chip" style="background:${sevColor(a.severity)}22;color:${sevColor(a.severity)}">${esc(a.severity)}</span></td>
+         <td class="line" title="${esc(a.line)}">${esc(a.line)}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="empty">还没有告警 —— 用 <code>akira watch &lt;日志文件&gt;</code> 开始监控</td></tr>`;
+
+    if ((c.lines_scanned || 0) === 0) {
+      document.getElementById("funnel").innerHTML =
+        `<div class="empty">尚无扫描数据。先运行 <code>akira watch &lt;日志文件&gt;</code>(需 storage.enabled),
+            这里的漏斗、拦截率与成本密度就会开始累计。</div>`;
+      document.getElementById("intercept").textContent = "—";
+    }
+
+    dot.className = "dot ok";
+    document.getElementById("updated").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    errBox.style.display = "none";
+  } catch (e) {
+    dot.className = "dot bad";
+    document.getElementById("updated").textContent = "连接失败";
+    errBox.textContent = "拉取数据失败:" + e.message;
+    errBox.style.display = "block";
+  }
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

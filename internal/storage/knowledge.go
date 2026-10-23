@@ -102,6 +102,16 @@ func (s *SQLiteStore) CountKnowledge() (int, error) {
 	return n, nil
 }
 
+// KnowledgeStats 知识库观测两项:卡片总数 + 累计复用次数(hit_count 求和)。
+// "10 次故障收敛成 1 张复用 9 次的卡片"这一句,靠这组数字兑现
+func (s *SQLiteStore) KnowledgeStats() (cards int, reuses int64, err error) {
+	var n int64
+	if err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM knowledge`).Scan(&n, &reuses); err != nil {
+		return 0, 0, fmt.Errorf("统计知识库失败: %w", err)
+	}
+	return int(n), reuses, nil
+}
+
 // ===== 向量 ↔ BLOB 编解码 =====
 
 // embedToBlob 向量 → LittleEndian float64 字节块
